@@ -1,0 +1,10 @@
+[package]
+name = "la_bruteforce"
+version = "6.6.6"
+authors = ["Francis Lalonde <fralalonde@gmail.com>"]
+
+[dependencies]
+midir = "0.5"
+lazy_static = "1.2"
+termion = "*"
+linked-hash-map = "0.5"
