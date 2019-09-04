@@ -1,52 +1,57 @@
-extern crate midir;
-#[macro_use]
-extern crate lazy_static;
-extern crate linked_hash_map;
+use std::path::PathBuf;
+use structopt::StructOpt;
 
-extern crate termion;
+use cursive::Cursive;
+use cursive::views::{Dialog, TextView};
 
-#[macro_use]
-mod core;
-mod microbrute;
-mod midi;
-mod ui;
+mod hotplug;
 
-use microbrute::Microbrute;
-use midir::{MidiOutput};
-
-use termion::raw::{IntoRawMode};
-use termion::{cursor, style};
-
-use std::io::{stdout, Write};
-
-fn main() -> core::Result<()> {
-    // open midi "ports"
-    let midi_out = MidiOutput::new("LaBruteforce Out")?;
-    let out_port =
-        midi::lookup_out_port(&midi_out, microbrute::PORT_NAME).ok_or("No Microbrute Out Port")?;
-    let conn_out = midi_out.connect(out_port, "Microbrute Control")?;
-
-    let brute = Microbrute::from_midi(conn_out)?;
-
-    let mut raw_term = stdout().into_raw_mode()?;
-    write!(raw_term, "{}", termion::cursor::Hide)?;
-    raw_term.flush()?;
-
-    let mut ui = ui::ParamMenu::new(Box::new(brute), None);
-
-    let ui_result = ui.run(&mut raw_term);
-    println!("{}{}", style::Reset, cursor::Left(0));
-    ui_result
+#[derive(StructOpt, Debug)]
+#[structopt(name = "la_bruteforce")]
+enum CLI {
+    #[structopt(name = "watch")]
+    /// Monitor known devices being connected and disconnected
+    Watch {
+        #[structopt(default_value = "*")]
+        device: String,
+    },
+    #[structopt(name = "tui")]
+    /// Start Text UI
+    TUI,
+    #[structopt(name = "show")]
+    /// Show information about known devices
+    Show {
+    },
+    #[structopt(name = "list")]
+    /// List connected devices
+    List {
+    },
+    #[structopt(name = "get")]
+    /// Get a device's parameter value
+    Get {
+    },
+    #[structopt(name = "set")]
+    /// Set a device's parameter value
+    Set {
+    },
 }
 
-//fn known_devices(midi_out: &MidiOutput, midi_in: &MidiInput) -> core::Result<Vec<Microbrute>> {
-//    // enumerate devices, detected and configured
-//    // find single microbrute for now
-////    let out_port = midi::enum_out_port(midi_out);
-//    let out_port = midi::lookup_out_port(&midi_out, &microbrute::dev_name()).ok_or("No Microbrute Out Port")?;
-//    let in_port = midi::lookup_in_port(&midi_in, &microbrute::dev_name()).ok_or("No Microbrute In Port")?;
-//
-//    let device = Microbrute::default();
-//    Ok(vec![])
-//
-//}
+fn main() {
+    let opt = CLI::from_args();
+    println!("{:#?}", opt);
+
+    match opt {
+        Watch => {hotplug::watch();},
+        _ =>  ()
+    }
+
+    // Creates the cursive root - required for every application.
+    let mut siv = Cursive::default();
+    // Creates a dialog with a single "Quit" button
+    siv.add_layer(Dialog::around(TextView::new("Hello Dialog!"))
+        .title("Cursive")
+        .button("Quit", |s| s.quit()));
+
+    // Starts the event loop.
+    siv.run();
+}

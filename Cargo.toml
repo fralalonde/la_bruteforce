@@ -2,9 +2,12 @@
 name = "la_bruteforce"
 version = "6.6.6"
 authors = ["Francis Lalonde <fralalonde@gmail.com>"]
+edition = "2018"
 
 [dependencies]
 midir = "0.5"
 lazy_static = "1.2"
-termion = "*"
 linked-hash-map = "0.5"
+structopt = "0.3"
+cursive = "0.13"
+rusb = "0.5"
