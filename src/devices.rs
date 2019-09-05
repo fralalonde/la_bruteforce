@@ -1,13 +1,22 @@
+use std::iter::Iterator;
+use linked_hash_map::LinkedHashMap;
+use midir::{MidiOutput, MidiInput};
+
+use crate::devices::ParameterBounds::*;
+
+pub type MidiPort = usize;
 pub type MidiValue = u8;
 
-struct Device {
+pub struct Device {
+    usb_vendor_id: u32,
+    usb_product_id: u32,
     sysex_out_id: u8,
     sysex_cmd_id: u8,
     name: &'static str,
     params: Vec<Param>,
 }
 
-struct Param {
+pub struct Param {
     sysex_out_id: u8,
     sysex_cmd_id: u8,
     name: &'static str,
@@ -21,18 +30,24 @@ pub enum ParameterBounds {
 }
 
 lazy_static!{
-    pub static ref MICROBRUTE: Device = microbrute();
-    pub static ref DEVICES: Vec<Device> = vec![MICROBRUTE];
-    pub static ref DEVICE_NAMES: LinkedHashMap<&' static str, Device> = named();
+    pub static ref DEVICES: Vec<Device> = vec![microbrute()];
+    pub static ref PORT_NAMES: LinkedHashMap<&'static str, &'static Device> = port_names();
 }
 
-fn named() -> LinkedHashMap<&' static str, Device> {
-
+fn port_names() -> LinkedHashMap<&'static str, &'static Device> {
+    let mut map = LinkedHashMap::new();
+    for dev in DEVICES {
+        map.insert(dev.name, &dev);
+    }
+//    vec![MICROBRUTE].iter().collect()map(|dev| (dev.name, dev)).collect()
+    map
 }
 
 fn microbrute() -> Device {
     Device {
         name: "Microbrute",
+        usb_vendor_id: 0x1c75,
+        usb_product_id: 0x0206,
         sysex_out_id: 0x05,
         sysex_cmd_id: 0x06,
         params: vec![
@@ -125,28 +140,42 @@ fn microbrute() -> Device {
     }
 }
 
-fn main() -> core::Result<()> {
-    // open midi "ports"
-    let midi_out = MidiOutput::new("LaBruteforce Out")?;
-    let out_port =
-        midi::lookup_out_port(&midi_out, microbrute::PORT_NAME).ok_or("No Microbrute Out Port")?;
-    let conn_out = midi_out.connect(out_port, "Microbrute Control")?;
-
-    match Microbrute::from_midi(conn_out) {
-        Ok(brute) => {
-            let mut raw_term = stdout().into_raw_mode()?;
-            write!(raw_term, "{}", termion::cursor::Hide)?;
-            raw_term.flush()?;
-
-            let mut ui = ui::ParamMenu::new(Box::new(brute), None);
-
-            ui.run(&mut raw_term)?;
-            println!("{}{}", style::Reset, cursor::Left(0))
-        }
-        Err(err) => println!("{}", err)
-    }
-    Ok(())
+pub fn output_ports(midi: &MidiOutput) -> Vec<(MidiPort, &'static Device)> {
+    (0..midi.port_count())
+        .filter_map(|idx| midi.port_name(idx).map(|name| (idx, name)).ok())
+        .filter_map(|(idx, name)| PORT_NAMES.get(name.as_str()).map(|dev| (idx, dev)))
+        .collect()
 }
+
+pub fn input_ports(midi: &MidiInput) -> Vec<(MidiPort, &'static Device)> {
+    (0..midi.port_count())
+        .filter_map(|idx| midi.port_name(idx).map(|name| (idx, name)).ok())
+        .filter_map(|(idx, name)| PORT_NAMES.get(name.as_str()).map(|dev| (idx, dev)))
+        .collect()
+}
+
+//fn main() -> core::Result<()> {
+    // open midi "ports"
+//    let midi_out = MidiOutput::new("LaBruteforce")?;
+//    let out_port =
+//        lookup_out_port(&midi_out, microbrute::PORT_NAME).ok_or("No Microbrute Out Port")?;
+//    let conn_out = midi_out.connect(out_port, "Microbrute Control")?;
+
+//    match Microbrute::from_midi(conn_out) {
+//        Ok(brute) => {
+//            let mut raw_term = stdout().into_raw_mode()?;
+//            write!(raw_term, "{}", termion::cursor::Hide)?;
+//            raw_term.flush()?;
+//
+//            let mut ui = ui::ParamMenu::new(Box::new(brute), None);
+//
+//            ui.run(&mut raw_term)?;
+//            println!("{}{}", style::Reset, cursor::Left(0))
+//        }
+//        Err(err) => println!("{}", err)
+//    }
+//    Ok(())
+//}
 
 //fn known_devices(midi_out: &MidiOutput, midi_in: &MidiInput) -> core::Result<Vec<Microbrute>> {
 //    // enumerate devices, detected and configured

@@ -1,10 +1,13 @@
-use std::path::PathBuf;
+#[macro_use]
+extern crate lazy_static;
+
 use structopt::StructOpt;
 
 use cursive::Cursive;
 use cursive::views::{Dialog, TextView};
 
 mod hotplug;
+mod devices;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "la_bruteforce")]
@@ -42,6 +45,7 @@ fn main() {
 
     match opt {
         Watch => {hotplug::watch();},
+//        List => {devices::output_ports()}
         _ =>  ()
     }
 

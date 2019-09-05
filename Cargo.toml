@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 midir = "0.5"
-lazy_static = "1.2"
+lazy_static = "1.4"
 linked-hash-map = "0.5"
 structopt = "0.3"
 cursive = "0.13"
