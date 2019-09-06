@@ -4,11 +4,17 @@ struct HotPlugHandler;
 
 impl<T: UsbContext> rusb::Hotplug<T> for HotPlugHandler {
     fn device_arrived(&mut self, device: Device<T>) {
-        println!("device arrived {:?}", device.device_descriptor().expect("dev desc"));
+        println!(
+            "device arrived {:?}",
+            device.device_descriptor().expect("dev desc")
+        );
     }
 
     fn device_left(&mut self, device: Device<T>) {
-        println!("device left {:?}", device.device_descriptor().expect("dev desc"));
+        println!(
+            "device left {:?}",
+            device.device_descriptor().expect("dev desc")
+        );
     }
 }
 
