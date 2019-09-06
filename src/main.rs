@@ -3,8 +3,8 @@ extern crate lazy_static;
 
 use structopt::StructOpt;
 
-use midir::MidiOutput;
 use crate::devices::ParameterBounds;
+use midir::MidiOutput;
 
 mod devices;
 mod hotplug;
@@ -39,28 +39,41 @@ enum Command {
     },
     #[structopt(name = "get")]
     /// Get a device's parameter value
-    Get {},
+    Get {
+        /// Name of the device as listed
+        device_name: String,
+        /// Name of the param as listed
+        param_name: String,
+    },
     #[structopt(name = "set")]
     /// Set a device's parameter value
-    Set {},
+    Set {
+        /// Name of the device as listed
+        device_name: String,
+        /// Name of the param as listed
+        param_name: String,
+        /// New bound value of the param
+        param_value: String,
+    },
 }
 
 #[derive(StructOpt, Debug)]
 enum List {
     /// All active devices
-    Port,
+    Ports,
 
     /// All known devices
-    Device {},
+    Devices {},
 
     /// A single device's possible parameters
-    Param {
-        /// Name of the known device as listed
+    Params {
+        /// Name of the device as listed
         device_name: String,
     },
-    Bound {
-        /// Name of the known device as listed
+    Bounds {
+        /// Name of the device as listed
         device_name: String,
+        /// Name of the param as listed
         param_name: String,
     },
 }
@@ -79,25 +92,28 @@ fn main() -> midi::Result<()> {
             hotplug::watch();
         }
         Command::List { subcmd } => {
-            let subcmd = subcmd.unwrap_or(List::Port);
+            let subcmd = subcmd.unwrap_or(List::Ports);
             match subcmd {
-                List::Port {} => {
+                List::Ports {} => {
                     let midi_out = MidiOutput::new("LaBruteForce")?;
                     let ports = midi::output_ports(&midi_out)
                         .iter()
                         .for_each(|(name, _idx)| println!("{}", name));
                 }
-                List::Device {} => devices::known_devices()
+                List::Devices {} => devices::known_devices()
                     .iter()
                     .for_each(|dev| println!("{}", dev.name)),
-                List::Param { device_name } => {
+                List::Params { device_name } => {
                     devices::known_devices_by_name().get(&device_name)
                         .map(|dev| for param in &dev.params {
                             println!("{}", param.name);
                         })
                         .unwrap_or_else(|| println!("Unknown device '{}'. Use `la_bruteforce list device` for known device names", device_name));
                 }
-                List::Bound { device_name, param_name } => {
+                List::Bounds {
+                    device_name,
+                    param_name,
+                } => {
                     devices::known_devices_by_name().get(&device_name)
                         .map(|dev| dev.params.iter()
                             .find(|param| param_name.as_str().eq(param.name))
@@ -108,11 +124,24 @@ fn main() -> midi::Result<()> {
                                     }},
                                 ParameterBounds::Range(lo, hi) => println!("[{}..{}]", lo, hi)
                             })
-                            .unwrap_or_else(|| println!("Unknown param '{}'. Use `la_bruteforce list param {}` for known param names", param_name, device_name))
+                            .unwrap_or_else(|| println!("Unknown param '{}'. Use `la_bruteforce list params {}` for known param names", param_name, device_name))
                         )
-                        .unwrap_or_else(|| println!("Unknown device '{}'. Use `la_bruteforce list device` for known device names", device_name));
+                        .unwrap_or_else(|| println!("Unknown device '{}'. Use `la_bruteforce list devices` for known device names", device_name));
                 }
             };
+        }
+        Command::Set {
+            device_name,
+            param_name,
+            param_value,
+        } => {
+            hotplug::watch();
+        }
+        Command::Get {
+            device_name,
+            param_name,
+        } => {
+            hotplug::watch();
         }
         _ => (),
     }

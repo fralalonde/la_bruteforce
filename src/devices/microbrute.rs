@@ -26,7 +26,7 @@ pub fn microbrute() -> Device {
                 name: "Play",
                 sysex_out_id: 0x2e,
                 sysex_cmd_id: 0x2f,
-                bounds: Discrete(vec![(0, "Hold"), (1, "Note On")]),
+                bounds: Discrete(vec![(0, "Hold"), (1, "NoteOn")]),
             },
             Param {
                 name: "SeqRetrig",

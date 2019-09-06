@@ -50,22 +50,3 @@ pub fn known_devices_by_name() -> LinkedHashMap<String, Device> {
         .map(|dev| (dev.name.to_owned(), dev))
         .collect()
 }
-
-//lazy_static! {
-//    pub static ref DEVICES: Vec<Device> = vec![microbrute::microbrute(), beatstep::beatstep(),];
-//    pub static ref PORT_NAMES: LinkedHashMap<String, Device> = known_devices_by_name();
-//}
-
-//pub fn port_devices(
-//    ports: &LinkedHashMap<String, MidiPort>,
-//) -> LinkedHashMap<MidiPort, &Device> {
-//    known_devices_by_name()
-//        .iter()
-//        .filter_map(move |(dname, dev)| {
-//            ports
-//                .iter()
-//                .find(|(pname, idx)| pname.starts_with(dname))
-//                .map(|(_dname, idx)| (*idx, dev))
-//        })
-//        .collect()
-//}
