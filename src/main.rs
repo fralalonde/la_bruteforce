@@ -99,15 +99,16 @@ fn main() -> midi::Result<()> {
                 }
                 List::Bound { device_name, param_name } => {
                     devices::known_devices_by_name().get(&device_name)
-                        .map(|dev| dev.params.iter().find(|param| param.name.equals(param_name))
+                        .map(|dev| dev.params.iter()
+                            .find(|param| param_name.as_str().eq(param.name))
                             .map(|param| match &param.bounds {
-                            &ParameterBounds::Discrete(values) =>
-                                for v in &values {
-                                    println!("{}", param.1);
-                                }
-                            &ParameterBounds::Range(low, hi) => println!("[{}..{}]", lo, hi)
-                        })
-                            .unwrap_or_else(|| println!("Unknown param '{}'. Use `la_bruteforce list param {}` for known param names", param_name, device_name));
+                                ParameterBounds::Discrete(values) => {
+                                    for bound in values {
+                                        println!("{}", bound.1)
+                                    }},
+                                ParameterBounds::Range(lo, hi) => println!("[{}..{}]", lo, hi)
+                            })
+                            .unwrap_or_else(|| println!("Unknown param '{}'. Use `la_bruteforce list param {}` for known param names", param_name, device_name))
                         )
                         .unwrap_or_else(|| println!("Unknown device '{}'. Use `la_bruteforce list device` for known device names", device_name));
                 }
