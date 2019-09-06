@@ -1,8 +1,4 @@
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
-use std::cmp::Eq;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::hash::Hash;
 
 use std::time::Duration;
 
@@ -13,7 +9,7 @@ use std::thread::sleep;
 
 pub type MidiPort = usize;
 
-pub type Result<T> = ::std::result::Result<T, Box<::std::error::Error>>;
+pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
 
 pub fn output_ports(midi: &MidiOutput) -> LinkedHashMap<String, MidiPort> {
     (0..midi.port_count())
@@ -83,7 +79,7 @@ impl SysexConnection {
             LinkedHashMap::new(),
         )?;
 
-        /// TODO make this a handle
+        // TODO make this a handle
         Ok(RxHandle(conn_in))
     }
 

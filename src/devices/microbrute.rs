@@ -4,6 +4,7 @@ use crate::devices::{Device, Param};
 pub fn microbrute() -> Device {
     Device {
         name: "MicroBrute",
+        port_name: "MicroBrute",
         usb_vendor_id: 0x1c75,
         usb_product_id: 0x0206,
         sysex_out_id: 0x05,

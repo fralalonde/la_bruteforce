@@ -3,7 +3,8 @@ use crate::devices::{Device, Param};
 
 pub fn beatstep() -> Device {
     Device {
-        name: "Arturia BeatStep",
+        name: "BeatStep",
+        port_name: "Arturia BeatStep",
         usb_vendor_id: 0x1c75,
         usb_product_id: 0x0206,
         sysex_out_id: 0x05,
