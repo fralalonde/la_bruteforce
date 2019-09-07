@@ -15,26 +15,26 @@ enum HotplugEvent {
     DISCONNECTED(&'static Device),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Device {
     usb_vendor_id: u32,
     usb_product_id: u32,
-    sysex_out_id: u8,
-    sysex_cmd_id: u8,
-    port_name: &'static str,
+    pub sysex_out_id: u8,
+    pub sysex_tx_id: u8,
+    pub port_name: &'static str,
     pub name: &'static str,
     pub params: Vec<Param>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Param {
-    sysex_out_id: SysexParamId,
-    sysex_cmd_id: SysexParamId,
+    pub sysex_rx_id: SysexParamId,
+    pub sysex_tx_id: SysexParamId,
     pub name: &'static str,
     pub bounds: ParameterBounds,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParameterBounds {
     Discrete(Vec<(MidiValue, &'static str)>),
     Range(MidiValue, MidiValue),

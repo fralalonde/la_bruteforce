@@ -8,7 +8,7 @@ pub fn beatstep() -> Device {
         usb_vendor_id: 0x1c75,
         usb_product_id: 0x0206,
         sysex_out_id: 0x05,
-        sysex_cmd_id: 0x06,
+        sysex_tx_id: 0x06,
         params: vec![],
     }
 }

@@ -7,6 +7,8 @@ use crate::devices::{Device, SysexParamId};
 use linked_hash_map::LinkedHashMap;
 use std::thread::sleep;
 
+pub const CLIENT_NAME: &str = "LaBruteForce";
+
 pub type MidiPort = usize;
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
@@ -23,8 +25,8 @@ pub fn input_ports(midi: &MidiInput) -> LinkedHashMap<String, MidiPort> {
         .collect()
 }
 
-struct SysexConnection {
-    device: &'static Device,
+pub struct SysexConnection {
+    device: Device,
     midi_connection: MidiOutputConnection,
     sysex_counter: usize,
 }
@@ -40,36 +42,39 @@ fn is_device_sysex(message: &[u8], device_code: u8) -> bool {
         message[7] == 0x01
 }
 
-struct RxHandle(MidiInputConnection<LinkedHashMap<SysexParamId, MidiValue>>);
+pub struct RxHandle(MidiInputConnection<LinkedHashMap<SysexParamId, MidiValue>>);
 
 impl RxHandle {
-    fn close(self, wait_millis: u64) -> LinkedHashMap<SysexParamId, MidiValue> {
+    pub fn close(self, wait_millis: u64) -> LinkedHashMap<SysexParamId, MidiValue> {
         sleep(Duration::from_millis(wait_millis));
         self.0.close().1
     }
 }
 
 impl SysexConnection {
-    pub fn new(midi_out: MidiOutput, port_dev: (MidiPort, &'static Device)) -> Result<Self> {
-        Ok(SysexConnection {
-            device: port_dev.1,
-            midi_connection: midi_out.connect(port_dev.0, port_dev.1.name)?,
+    pub fn new(midi_connection: MidiOutputConnection, device: Device) -> Self {
+        SysexConnection {
+            device,
+            midi_connection,
             sysex_counter: 0,
-        })
+        }
     }
 
-    fn init_receiver(&mut self, port_name: &str, device_id: u8) -> Result<RxHandle> {
-        let midi_in = MidiInput::new("La_BruteForce In")?;
-        let in_port = *input_ports(&midi_in).get(port_name).ok_or(format!(
+    pub fn init_receiver(&mut self, port_name: &str, device: &Device) -> Result<RxHandle> {
+        let midi_in = MidiInput::new(CLIENT_NAME)?;
+        let in_port = *input_ports(&midi_in).get(port_name)
+            // TODO snafu error
+            .ok_or(format!(
             "Could not open input midi port for '{}'",
-            port_name
+            &device.port_name
         ))?;
+        let sysex_out_id = device.sysex_out_id;
         let conn_in = midi_in.connect(
             in_port,
             "Sysex Query Results",
             move |_ts, message, received_values| {
                 if message[0] == 0xf0 && message[message.len() - 1] == 0xf7 {
-                    if is_device_sysex(message, device_id) {
+                    if is_device_sysex(message, sysex_out_id) {
                         let param_id = message[8];
                         let value = message[9] as MidiValue;
                         received_values.insert(param_id, value);
@@ -83,7 +88,7 @@ impl SysexConnection {
         Ok(RxHandle(conn_in))
     }
 
-    fn query_value(&mut self, param_id: SysexParamId) -> Result<()> {
+    pub fn query_value(&mut self, param_id: SysexParamId) -> Result<()> {
         self.midi_connection.send(&SYSEX_QUERY_START)?;
         self.midi_connection
             .send(&sysex_query_msg(self.sysex_counter, param_id))?;
@@ -91,7 +96,7 @@ impl SysexConnection {
         Ok(())
     }
 
-    fn send_value(&mut self, param: SysexParamId, value: MidiValue) -> Result<()> {
+    pub fn send_value(&mut self, param: SysexParamId, value: MidiValue) -> Result<()> {
         self.midi_connection
             .send(&sysex_update_msg(self.sysex_counter, param, value))?;
         self.sysex_counter += 1;
