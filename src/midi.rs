@@ -3,7 +3,7 @@ use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use std::time::Duration;
 
 use crate::devices::MidiValue;
-use crate::devices::{Device, SysexParamId};
+use crate::devices::{DeviceDescriptor, SysexParamId};
 use linked_hash_map::LinkedHashMap;
 use std::thread::sleep;
 use crate::sysex;
@@ -27,7 +27,7 @@ pub fn input_ports(midi: &MidiInput) -> LinkedHashMap<String, MidiPort> {
 }
 
 pub struct SysexConnection {
-    device: Device,
+    device: DeviceDescriptor,
     midi_connection: MidiOutputConnection,
     sysex_counter: usize,
 }
@@ -53,7 +53,7 @@ impl RxHandle {
 }
 
 impl SysexConnection {
-    pub fn new(midi_connection: MidiOutputConnection, device: Device) -> Self {
+    pub fn new(midi_connection: MidiOutputConnection, device: DeviceDescriptor) -> Self {
         SysexConnection {
             device,
             midi_connection,
@@ -61,14 +61,14 @@ impl SysexConnection {
         }
     }
 
-    pub fn init_receiver(&mut self, port_name: &str, device: &Device) -> Result<RxHandle> {
+    pub fn init_receiver(&mut self, port_name: &str, device: &DeviceDescriptor) -> Result<RxHandle> {
         let midi_in = MidiInput::new(CLIENT_NAME)?;
         let in_port = *input_ports(&midi_in)
             .get(port_name)
             // TODO snafu error
             .ok_or(format!(
                 "Could not open input midi port for '{}'",
-                &device.port_name
+                &device.port_name_prefix
             ))?;
         let sysex_out_id = device.sysex_out_id;
         let conn_in = midi_in.connect(

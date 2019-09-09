@@ -7,7 +7,7 @@ extern crate lazy_static;
 use midir::{MidiInput, MidiOutput};
 use structopt::StructOpt;
 
-use crate::devices::{Device, ParameterBounds};
+use crate::devices::{DeviceDescriptor, ParameterBounds};
 use crate::midi::SysexConnection;
 use std::error::Error;
 
@@ -201,7 +201,7 @@ fn main() -> midi::Result<()> {
             let midi_out = MidiOutput::new(midi::CLIENT_NAME)?;
             let (port_name, port_idx) = midi::output_ports(&midi_out)
                 .iter()
-                .find(|(pname, idx)| pname.starts_with(&device.port_name))
+                .find(|(pname, idx)| pname.starts_with(&device.port_name_prefix))
                 .map(|(pname, idx)| (pname.clone(), *idx))
                 .ok_or(DeviceError::NoPort {
                     device_name: device_name.to_owned(),
@@ -228,7 +228,7 @@ fn main() -> midi::Result<()> {
             let midi_out = MidiOutput::new(midi::CLIENT_NAME)?;
             let (port_name, port_idx) = midi::output_ports(&midi_out)
                 .iter()
-                .find(|(pname, idx)| pname.starts_with(&device.port_name))
+                .find(|(pname, idx)| pname.starts_with(&device.port_name_prefix))
                 .map(|(pname, idx)| (pname.clone(), *idx))
                 .ok_or(DeviceError::NoPort {
                     device_name: device_name.to_owned(),
@@ -311,7 +311,7 @@ fn main() -> midi::Result<()> {
     Ok(())
 }
 
-fn query<F: FnOnce(&mut SysexConnection, &Device) -> midi::Result<()>>(
+fn query<F: FnOnce(&mut SysexConnection, &DeviceDescriptor) -> midi::Result<()>>(
     device_name: &str,
     rece: F,
 ) -> midi::Result<()> {
@@ -325,7 +325,7 @@ fn query<F: FnOnce(&mut SysexConnection, &Device) -> midi::Result<()>>(
     let midi_out = MidiOutput::new(midi::CLIENT_NAME)?;
     let (port_name, port_idx) = midi::output_ports(&midi_out)
         .iter()
-        .find(|(pname, idx)| pname.starts_with(&device.port_name))
+        .find(|(pname, idx)| pname.starts_with(&device.port_name_prefix))
         .map(|(pname, idx)| (pname.clone(), *idx))
         .ok_or(DeviceError::NoPort {
             device_name: device_name.to_owned(),

@@ -11,17 +11,17 @@ pub type SysexParamId = u8;
 
 #[derive(Debug)]
 enum HotplugEvent {
-    CONNECTED(&'static Device),
-    DISCONNECTED(&'static Device),
+    CONNECTED(&'static DeviceDescriptor),
+    DISCONNECTED(&'static DeviceDescriptor),
 }
 
 #[derive(Debug, Clone)]
-pub struct Device {
+pub struct DeviceDescriptor {
     usb_vendor_id: u32,
     usb_product_id: u32,
     pub sysex_out_id: u8,
     pub sysex_tx_id: u8,
-    pub port_name: &'static str,
+    pub port_name_prefix: &'static str,
     pub name: &'static str,
     pub params: Vec<Param>,
 }
@@ -43,11 +43,11 @@ pub enum ParameterBounds {
     Range(u8, (MidiValue, MidiValue)),
 }
 
-pub fn known_devices() -> Vec<Device> {
-    vec![microbrute::microbrute(), beatstep::beatstep()]
+pub fn known_devices() -> Vec<DeviceDescriptor> {
+    vec![microbrute::descriptor(), beatstep::beatstep()]
 }
 
-pub fn known_devices_by_name() -> LinkedHashMap<String, Device> {
+pub fn known_devices_by_name() -> LinkedHashMap<String, DeviceDescriptor> {
     known_devices()
         .into_iter()
         .map(|dev| (dev.name.to_owned(), dev))

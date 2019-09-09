@@ -1,10 +1,10 @@
 use crate::devices::ParameterBounds::*;
-use crate::devices::{Device, Param};
+use crate::devices::{DeviceDescriptor, Param};
 
-pub fn beatstep() -> Device {
-    Device {
+pub fn beatstep() -> DeviceDescriptor {
+    DeviceDescriptor {
         name: "BeatStep",
-        port_name: "Arturia BeatStep",
+        port_name_prefix: "Arturia BeatStep",
         usb_vendor_id: 0x1c75,
         usb_product_id: 0x0206,
         sysex_out_id: 0x05,
