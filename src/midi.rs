@@ -6,6 +6,7 @@ use crate::devices::MidiValue;
 use crate::devices::{Device, SysexParamId};
 use linked_hash_map::LinkedHashMap;
 use std::thread::sleep;
+use crate::sysex;
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -62,12 +63,13 @@ impl SysexConnection {
 
     pub fn init_receiver(&mut self, port_name: &str, device: &Device) -> Result<RxHandle> {
         let midi_in = MidiInput::new(CLIENT_NAME)?;
-        let in_port = *input_ports(&midi_in).get(port_name)
+        let in_port = *input_ports(&midi_in)
+            .get(port_name)
             // TODO snafu error
             .ok_or(format!(
-            "Could not open input midi port for '{}'",
-            &device.port_name
-        ))?;
+                "Could not open input midi port for '{}'",
+                &device.port_name
+            ))?;
         let sysex_out_id = device.sysex_out_id;
         let conn_in = midi_in.connect(
             in_port,
@@ -92,6 +94,12 @@ impl SysexConnection {
         self.midi_connection.send(&SYSEX_QUERY_START)?;
         self.midi_connection
             .send(&sysex_query_msg(self.sysex_counter, param_id))?;
+        self.sysex_counter += 1;
+        Ok(())
+    }
+
+    pub fn query_general_information(&mut self) -> Result<()> {
+        self.midi_connection.send(unsafe {sysex::Message::default().as_slice()})?;
         self.sysex_counter += 1;
         Ok(())
     }

@@ -1,16 +1,23 @@
+#![feature(arbitrary_enum_discriminant)]
+#![feature(generators, generator_trait)]
+
 #[macro_use]
 extern crate lazy_static;
 
+use midir::{MidiInput, MidiOutput};
 use structopt::StructOpt;
-use midir::{MidiOutput, MidiInput};
 
-use crate::devices::ParameterBounds;
+use crate::devices::{Device, ParameterBounds};
 use crate::midi::SysexConnection;
 use std::error::Error;
+
+use std::pin::Pin;
+use std::ops::Generator;
 
 mod devices;
 mod hotplug;
 mod midi;
+mod sysex;
 mod tui;
 
 #[derive(StructOpt, Debug)]
@@ -39,6 +46,14 @@ enum Command {
         #[structopt(subcommand)] // Note that we mark a field as a subcommand
         subcmd: Option<List>,
     },
+
+    /// Inquire Sysex General Information
+    Detect { device_name: String },
+
+    /// Scan all possible parameters & possibly break it
+    Scan { device_name: String },
+    /// Reset all known parameters to first bound value
+    Reset { device_name: String },
     #[structopt(name = "get")]
     /// Get a device's parameter value
     Get {
@@ -55,7 +70,7 @@ enum Command {
         /// Name of the param as listed
         param_name: String,
         /// New bound value of the param
-        param_value: String,
+        value_name: String,
     },
 }
 
@@ -80,9 +95,11 @@ enum List {
     },
 }
 
-use snafu::{ResultExt, Snafu, OptionExt, IntoError};
-use std::io;
 use crate::List::Devices;
+use snafu::{IntoError, OptionExt, ResultExt, Snafu};
+use std::io;
+use std::str::FromStr;
+use std::ops::GeneratorState;
 
 #[derive(Debug, Snafu)]
 enum DeviceError {
@@ -101,6 +118,9 @@ enum DeviceError {
     UnknownParameter {
         param_id: u8,
     },
+    InvalidValue {
+        value_name: String,
+    },
 }
 
 type Result<T, E = DeviceError> = std::result::Result<T, E>;
@@ -108,6 +128,20 @@ type Result<T, E = DeviceError> = std::result::Result<T, E>;
 fn main() -> midi::Result<()> {
     let app = LaBruteForce::from_args();
     let cmd: Command = app.subcmd.unwrap_or(Command::TUI);
+
+//    let mut generator = || {
+//        yield 1;
+//        return "foo"
+//    };
+//
+//    match Pin::new(&mut generator).resume() {
+//        GeneratorState::Yielded(1) => {}
+//        _ => panic!("unexpected value from resume"),
+//    }
+//    match Pin::new(&mut generator).resume() {
+//        GeneratorState::Complete("foo") => {}
+//        _ => panic!("unexpected value from resume"),
+//    }
 
     match cmd {
         Command::TUI {} => {
@@ -148,7 +182,7 @@ fn main() -> midi::Result<()> {
                                     for bound in values {
                                         println!("{}", bound.1)
                                     }},
-                                ParameterBounds::Range(lo, hi) => println!("[{}..{}]", lo, hi)
+                                ParameterBounds::Range(_offset, (lo, hi)) => println!("[{}..{}]", lo, hi)
                             })
                             .unwrap_or_else(|| println!("Unknown param '{}'. Use `la_bruteforce list params {}` for known param names", param_name, device_name))
                         )
@@ -156,72 +190,178 @@ fn main() -> midi::Result<()> {
                 }
             };
         }
+        Command::Detect { device_name } => {
+            let device = devices::known_devices_by_name()
+                .get(&device_name)
+                .cloned()
+                .ok_or(DeviceError::InvalidName {
+                    device_name: device_name.to_owned(),
+                })?;
+
+            let midi_out = MidiOutput::new(midi::CLIENT_NAME)?;
+            let (port_name, port_idx) = midi::output_ports(&midi_out)
+                .iter()
+                .find(|(pname, idx)| pname.starts_with(&device.port_name))
+                .map(|(pname, idx)| (pname.clone(), *idx))
+                .ok_or(DeviceError::NoPort {
+                    device_name: device_name.to_owned(),
+                })?;
+
+            let mut sysex = midi_out
+                .connect(port_idx, &port_name)
+                .map(|conn| SysexConnection::new(conn, device.clone()))?;
+
+            sysex.query_general_information();
+        }
         Command::Set {
             device_name,
             param_name,
-            param_value,
+            value_name,
         } => {
-            hotplug::watch();
+            let device = devices::known_devices_by_name()
+                .get(&device_name)
+                .cloned()
+                .ok_or(DeviceError::InvalidName {
+                    device_name: device_name.to_owned(),
+                })?;
+
+            let midi_out = MidiOutput::new(midi::CLIENT_NAME)?;
+            let (port_name, port_idx) = midi::output_ports(&midi_out)
+                .iter()
+                .find(|(pname, idx)| pname.starts_with(&device.port_name))
+                .map(|(pname, idx)| (pname.clone(), *idx))
+                .ok_or(DeviceError::NoPort {
+                    device_name: device_name.to_owned(),
+                })?;
+
+            let mut sysex = midi_out
+                .connect(port_idx, &port_name)
+                .map(|conn| SysexConnection::new(conn, device.clone()))?;
+
+            let param = device
+                .params
+                .iter()
+                .find(|p| p.name.eq(&param_name))
+                .cloned()
+                .ok_or(DeviceError::InvalidParam {
+                    device_name: device_name.clone(),
+                    param_name: param_name.clone(),
+                })?;
+
+            let vbound = match &param.bounds {
+                ParameterBounds::Discrete(values) => values
+                    .iter()
+                    .find(|v| v.1.eq(&value_name))
+                    .map(|v| v.0)
+                    .ok_or(DeviceError::InvalidValue { value_name })?,
+                ParameterBounds::Range(offset, (_lo, _hi)) => {
+                    u8::from_str(&value_name)? - *offset
+                }
+            };
+
+            sysex.send_value(param.sysex_tx_id, vbound)?;
         }
         Command::Get {
             device_name,
             mut param_names,
         } => {
-            let device = devices::known_devices_by_name()
-                .get(&device_name)
-                .cloned()
-                .ok_or(DeviceError::InvalidName{device_name: device_name.clone()})?;
+            query(&device_name, |sysex, device| {
+                if param_names.is_empty() {
+                    for param in &device.params {
+                        sysex.query_value(param.sysex_tx_id)?;
+                    }
+                } else {
+                    for param_name in param_names {
+                        let param = device
+                            .params
+                            .iter()
+                            .find(|p| p.name.eq(&param_name))
+                            .cloned()
+                            .ok_or(DeviceError::InvalidParam {
+                                device_name: device_name.clone(),
+                                param_name: param_name.clone(),
+                            })?;
 
-            let midi_out = MidiOutput::new(midi::CLIENT_NAME)?;
-            let (port_name, port_idx) = midi::output_ports(&midi_out).iter()
-                .find(|(pname, idx)| pname.starts_with(&device.port_name))
-                .map(|(pname, idx)| (pname.clone(), *idx))
-                .ok_or(DeviceError::NoPort { device_name: device_name.clone() })?;
-            let mut sysex = midi_out.connect(port_idx, &port_name)
-                .map(|conn| SysexConnection::new(conn, device.clone()))?;
-            let rx = sysex.init_receiver(&port_name, &device)?;
-
-            if param_names.is_empty() {
-                for param in &device.params {
-                    sysex.query_value(param.sysex_tx_id)?;
+                        sysex.query_value(param.sysex_tx_id)?;
+                    }
                 }
-            } else {
-                for param_name in param_names {
-                    let param = device.params.iter().find(|p| p.name.eq(&param_name))
-                        .cloned()
-                        .ok_or(DeviceError::InvalidParam {
-                            device_name: device_name.clone(),
-                            param_name: param_name.clone(),
-                        })?;
-
-                    sysex.query_value(param.sysex_tx_id)?;
-                }
-            }
-
-            let results = rx.close(1000);
-            if results.is_empty(){
-                return Err(Box::new(DeviceError::NoValueReceived))
-            }
-
-            for (param_id, value_id) in results.iter() {
-                let param = device.params.iter()
-                    .find(|pid| pid.sysex_rx_id == *param_id)
-                    .ok_or(DeviceError::UnknownParameter {param_id: *param_id})?;
-
-                match &param.bounds {
-                    ParameterBounds::Discrete(values) => {
-                        let bound = values.iter().find(|v| v.0 == *value_id).map_or_else(
-                            || format!("## UNBOUND_PARAM_VALUE [{}]", value_id),
-                            |v| v.1.to_owned());
-                        println!("{}: {}", &param.name, bound)
-                    },
-                    ParameterBounds::Range(lo, hi) => println!("{}: {}", &param.name, *value_id)
-                };
-            }
-
+                Ok(())
+            });
         }
+        Command::Scan { device_name } => {
+            query(&device_name, |sysex, device| {
+                for sysex_tx_id in 06..0xFF {
+                    sysex.query_value(sysex_tx_id)?;
+                }
+                Ok(())
+            });
+        }
+        Command::Reset { device_name } => {
+            query(&device_name, |sysex, device| {
+                for sysex_tx_id in 06..0xFF {
+                    sysex.query_value(sysex_tx_id)?;
+                }
+                Ok(())
+            });
+        }
+
         _ => (),
     }
 
+    Ok(())
+}
+
+fn query<F: FnOnce(&mut SysexConnection, &Device) -> midi::Result<()>>(
+    device_name: &str,
+    rece: F,
+) -> midi::Result<()> {
+    let device = devices::known_devices_by_name()
+        .get(device_name)
+        .cloned()
+        .ok_or(DeviceError::InvalidName {
+            device_name: device_name.to_owned(),
+        })?;
+
+    let midi_out = MidiOutput::new(midi::CLIENT_NAME)?;
+    let (port_name, port_idx) = midi::output_ports(&midi_out)
+        .iter()
+        .find(|(pname, idx)| pname.starts_with(&device.port_name))
+        .map(|(pname, idx)| (pname.clone(), *idx))
+        .ok_or(DeviceError::NoPort {
+            device_name: device_name.to_owned(),
+        })?;
+    let mut sysex = midi_out
+        .connect(port_idx, &port_name)
+        .map(|conn| SysexConnection::new(conn, device.clone()))?;
+    let rx = sysex.init_receiver(&port_name, &device)?;
+
+    rece(&mut sysex, &device);
+
+    let results = rx.close(1000);
+    if results.is_empty() {
+        return Err(Box::new(DeviceError::NoValueReceived));
+    }
+
+    for (param_id, value_id) in results.iter() {
+        match device
+            .params
+            .iter()
+            .find(|pid| pid.sysex_rx_id == *param_id)
+        {
+            Some(param) => match &param.bounds {
+                ParameterBounds::Discrete(values) => {
+                    let bound = values.iter().find(|v| v.0 == *value_id).map_or_else(
+                        || format!("## UNBOUND_PARAM_VALUE [{}]", value_id),
+                        |v| v.1.to_owned(),
+                    );
+                    println!("{}: {}", &param.name, bound)
+                }
+                ParameterBounds::Range(offset, (lo, hi)) => {
+                    println!("{}: {}", &param.name, *value_id + *offset)
+                }
+            },
+            None => println!("##Unknown[{}]: {}", param_id, value_id),
+        }
+    }
     Ok(())
 }

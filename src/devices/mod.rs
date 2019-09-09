@@ -36,8 +36,11 @@ pub struct Param {
 
 #[derive(Debug, Clone)]
 pub enum ParameterBounds {
+    /// List of raw value and display name pairs
     Discrete(Vec<(MidiValue, &'static str)>),
-    Range(MidiValue, MidiValue),
+
+    /// Raw value offset and display value bounds (Low to High, inclusive)
+    Range(u8, (MidiValue, MidiValue)),
 }
 
 pub fn known_devices() -> Vec<Device> {
