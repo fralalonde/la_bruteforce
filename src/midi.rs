@@ -1,53 +1,46 @@
-use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
+use midir::{MidiInput, MidiInputConnection, MidiOutput};
 
 use std::time::Duration;
 
-use crate::devices::{MidiValue, Bounds, DeviceError};
-use linked_hash_map::LinkedHashMap;
 use std::thread::sleep;
-use std::str::FromStr;
-use strum::IntoEnumIterator;
 
-const CLIENT_NAME: &str = "LaBruteForce";
-
-pub static MIDI_OUT_CLIENT: MidiOutput = MidiOutput::new(CLIENT_NAME).expect("MIDI client initialization failed");
+pub const CLIENT_NAME: &str = "LaBruteForce";
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MidiPort {
     pub number: usize,
     pub name: String,
 }
 
-pub fn output_ports() -> Vec<MidiPort> {
-    (0..MIDI_OUT_CLIENT.port_count())
-        .filter_map(|idx| MIDI_OUT_CLIENT.port_name(idx)
-            .map(|name| MidiPort {
-                name: name.clone(),
-                number: *idx,
-            }))
-        .collect()
+pub fn output_ports(midi_client: &MidiOutput) -> Vec<MidiPort> {
+    let mut v = vec![];
+    for number in 0..midi_client.port_count() {
+        let name = midi_client.port_name(number).unwrap();
+        v.push(MidiPort {       name,         number,    })
+    }
+    v
 }
 
-fn input_ports(midi: &MidiInput) -> LinkedHashMap<String, MidiPort> {
-    (0..midi.port_count())
-        .filter_map(|idx| midi.port_name(idx).map(|name| (name, idx)).ok())
-        .collect()
+fn input_port(midi: &MidiInput, name4: &str) ->  Option<MidiPort>  {
+    for number in 0..midi.port_count() {
+        if let Ok(name) = midi.port_name(number) {
+            if name4.eq(&name) {
+                return Some(MidiPort {       name,         number,    })
+            }
+        }
+    }
+    None
 }
-
-const SYSEX_QUERY_START: [u8; 6] = [0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7];
-
 
 pub fn sysex_query_init(port_name: &str) -> Result<SysexQuery> {
     let midi_in = MidiInput::new(CLIENT_NAME)?;
-    let in_port = *input_ports(&midi_in)
-        .get(port_name)
-        .ok_or(DeviceError::NoInputPort{ port_name: port_name.to_owned() })?;
-    Ok(SysexQuery(midi_in.connect(in_port, "Query Results",
+    let in_port = input_port(&midi_in, port_name).expect("FUCK RUST ERRORS");
+    Ok(SysexQuery(midi_in.connect(in_port.number, "Query Results",
        |_ts, message, results|
            if message[0] == 0xf0 && message[message.len() - 1] == 0xf7 {
-               results.push(message.into_vec());
+               results.push(message.to_vec());
            },
        Vec::new(),
     )?))

@@ -1,23 +1,22 @@
 use crate::devices::Bounds::*;
 use crate::devices::{MidiValue, Bounds, Device, Parameter, Descriptor};
-use crate::midi::{SysexQuery, MIDI_OUT_CLIENT};
-use linked_hash_map::LinkedHashMap;
+use crate::midi::{CLIENT_NAME};
 use midi::Result;
-use midir::{MidiInput, MidiOutput, MidiOutputConnection};
+use midir::{MidiOutput, MidiOutputConnection};
 use strum::IntoEnumIterator;
 use crate::midi::{self, MidiPort};
 use crate::devices::DeviceError;
-use std::thread::sleep;
 use std::str::FromStr;
+use self::MicrobruteParameter::*;
 
 //            usb_vendor_id: 0x1c75,
 //            usb_product_id: 0x0206,
 //            sysex_tx_id: 0x06,
 
-const MICROBRUTE_SYSEX_REQUEST: u8 = 0x06;
-const MICROBRUTE_SYSEX_REPLY: u8 = 0x05;
+//const MICROBRUTE_SYSEX_REQUEST: u8 = 0x06;
+//const MICROBRUTE_SYSEX_REPLY: u8 = 0x05;
 
-#[derive(Debug, EnumString, IntoStaticStr, EnumIter)]
+#[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr)]
 enum MicrobruteParameter {
     KeyNotePriority,
     KeyVelocityResponse,
@@ -32,6 +31,7 @@ enum MicrobruteParameter {
     SeqKeyRetrig,
     SeqNextSeq,
     SeqStep,
+    SeqStepOn,
 }
 
 #[derive(Debug)]
@@ -44,28 +44,32 @@ impl Descriptor for MicroBruteDescriptor {
         MicrobruteParameter::iter().map(|p| p.into()).collect()
     }
 
-    fn bounds(&self, param: Parameter) -> Bounds {
+    fn bounds(&self, param: &str) -> Result<Bounds> {
         bounds(param)
     }
 
     fn ports(&self) -> Vec<MidiPort> {
-        midi::output_ports().iter()
-            .filter(|(pname, idx)| pname.starts_with("MicroBrute"))
+        let midi_client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
+        midi::output_ports(&midi_client).into_iter()
+            .filter_map(|port| if port.name.starts_with("MicroBrute") {Some(port)} else {None} )
             .collect()
     }
 
-    fn connect(&self, port: &MidiPort) -> Result<Box<Device>> {
-        Ok(MicroBruteDevice {
-            midi_connection: MIDI_OUT_CLIENT.connect(port.number, &port.name)?,
+    fn connect(&self, midi_client: MidiOutput, port: &MidiPort) -> Result<Box<dyn Device>> {
+        let midi_connection = midi_client.connect(port.number, &port.name)?;
+        let mut brute = Box::new(MicroBruteDevice {
+            midi_connection,
             port_name: port.name.to_owned(),
             sysex_counter: 0,
-        })
+        });
+        brute.identify()?;
+        Ok(brute)
     }
 }
 
-fn bounds(param: Parameter) -> Bounds {
-    let p = MicrobruteParameter::from_str(param);
-    match p {
+fn bounds(param: &str) -> Result<Bounds> {
+    let p = MicrobruteParameter::from_str(param)?;
+    Ok(match p {
         KeyNotePriority => Discrete(vec![(0, "LastNote"), (1, "LowNote"), (2, "HighNote")]),
         KeyVelocityResponse => {
             Discrete(vec![(0, "Logarithmic"), (1, "Exponential"), (2, "Linear")])
@@ -87,42 +91,64 @@ fn bounds(param: Parameter) -> Bounds {
             (0x20, "1/32"),
         ]),
         SeqStepOn => Discrete(vec![(0, "Clock"), (1, "Gate")]),
-    }
+    })
 }
 
-
-#[derive(Debug)]
 pub struct MicroBruteDevice {
     midi_connection: MidiOutputConnection,
     port_name: String,
     sysex_counter: usize,
 }
 
+impl MicroBruteDevice {
+
+    // TODO return device version / id string
+    fn identify(&mut self) -> Result<()> {
+        let sysex_replies = midi::sysex_query_init(&self.port_name)?;
+        self.midi_connection.send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
+        let id = sysex_replies.close_wait(500).get(0).cloned().ok_or(DeviceError::NoReply)?;
+
+        if !id.as_slice().starts_with(&[0xf0, 0x7e, 0x01, /* arturia1 */ 0x06, /* arturia2 */ 0x02, 0x00, 0x20, 0x6b, 0x04, 0x00, 0x02, 0x01, /* major version */ 0x01, 0x00]) {
+            // remaining 0x00, /* minor version */ 0x03, 0x02, 0xf7]) {
+             Err(Box::new(DeviceError::WrongId {id: id.to_vec()}))
+        } else {
+            self.sysex_counter += 1;
+            Ok(())
+        }
+    }
+}
+
 impl Device for MicroBruteDevice {
-    fn query(&mut self, params: &[Parameter]) -> Result<Vec<(Parameter, MidiValue)>> {
-        let mut sysex_replies = midi::sysex_query_init(&self.port_name);
+    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, MidiValue)>> {
+        let sysex_replies = midi::sysex_query_init(&self.port_name)?;
         for param in params {
             let p = MicrobruteParameter::from_str(param)?;
-            self.midi_connection.send(&sysex_query_msg(self.sysex_counter, p))?;
+            self.midi_connection.send(&sysex_query_msg(self.sysex_counter, sysex_request(p)))?;
             self.sysex_counter += 1;
         }
-        Ok(sysex_replies.close_wait(500)
-            .map(|msg| (MicrobruteParameter::BendRange, msg[9]))
+        Ok(sysex_replies.close_wait(500).iter()
+            .map(|msg| {
+                let z = sysex_reply(msg[8]);
+                let p = match z {
+                    Some(p) => p.into(),
+                    None => "Unknown param"
+                };
+                (p, msg[9])
+            })
             .collect()
         )
     }
 
-    fn update(&mut self, param: Parameter, value: &str) -> Result<()> {
+    fn update(&mut self, param: &str, value: &str) -> Result<()> {
         let p = MicrobruteParameter::from_str(param)?;
-        let v = match bounds(param) {
+        let v = match bounds(param)? {
             Bounds::Discrete(values) => values.iter()
                 .find(|d| d.1.eq(value))
-                .ok_or(DeviceError::UnknownValue{})?.0,
-            Bounds::Range(offset, (lo, hi)) => u8::from_str(value)?
-                .ok_or(DeviceError::UnknownValue{})? - offset
+                .expect("FUCK RUST ERRORS").0,
+            Bounds::Range(offset, (_lo, _hi)) => u8::from_str(value).expect("FUCK RUST ERRORS") - offset,
         };
         self.midi_connection
-            .send(&sysex_update_msg(self.sysex_counter, p, v))?;
+            .send(&sysex_update_msg(self.sysex_counter, sysex_request(p), v))?;
         self.sysex_counter += 1;
         Ok(())
     }
@@ -137,31 +163,51 @@ impl Device for MicroBruteDevice {
 //}
 
 
-impl MicroBruteDevice {
-    fn sysex_cmd_out(param: MicrobruteParameter) -> (u8, u8) {
-        match param {
-            KeyNotePriority => (0x0c, 0x0b),
-            KeyVelocityResponse => (0x11, 0x10),
-            MidiRecvChan => (0x06, 0x05),
-            MidiSendChan => (0x08, 0x07),
-            LfoKeyRetrig => (0x0f, 0x0e),
-            EnvLegatoMode => (0x0d, 0x0c),
-            BendRange => (0x2c, 0x2b),
-            Gate => (0x36, 0x35),
-            Sync => (0x3c, 0x3b),
-            SeqPlay => (0x2e, 0x2d),
-            SeqKeyRetrig => (0x34, 0x33),
-            SeqNextSeq => (0x32, 0x31),
-            SeqStep =>(0x38, 0x37),
-            SeqStepOn => (0x2a, 0x2b),
-        }
+fn sysex_request(param: MicrobruteParameter) -> u8 {
+    match param {
+        KeyNotePriority => 0x0c,
+        KeyVelocityResponse => 0x12,
+        MidiRecvChan => 0x06,
+        MidiSendChan => 0x08,
+        LfoKeyRetrig => 0x10,
+        EnvLegatoMode => 0x0e,
+        BendRange => 0x2b,
+        Gate => 0x37,
+        Sync => 0x3d,
+        SeqPlay => 0x2f,
+        SeqKeyRetrig => 0x35,
+        SeqNextSeq => 0x33,
+        SeqStep => 0x39,
+        SeqStepOn => 0x2d,
     }
+}
+
+fn sysex_reply(code: u8) -> Option<MicrobruteParameter> {
+    match code {
+        0x0b => Some(KeyNotePriority),
+        0x11 => Some(KeyVelocityResponse),
+        0x05 => Some(MidiRecvChan),
+        0x07 => Some(MidiSendChan),
+        0x0e => Some(LfoKeyRetrig),
+        0x0d => Some(EnvLegatoMode),
+        0x2c => Some(BendRange),
+        0x36 => Some(Gate),
+        0x3c => Some(Sync),
+        0x2e => Some(SeqPlay),
+        0x34 => Some(SeqKeyRetrig),
+        0x32 => Some(SeqNextSeq),
+        0x38 => Some(SeqStep),
+        0x2a => Some(SeqStepOn),
+        _ => None
+    }
+}
+
 //    if is_device_sysex(message, MICROBRUTE_SYSEX_REPLY) {
 //        let param_id = message[8];
 //        let value = message[9] as MidiValue;
 //        received_values.insert(param_id, value);
 //    }
-}
+
 
 fn sysex_query_msg(counter: usize, param: u8) -> [u8; 10] {
     [

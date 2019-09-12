@@ -2,20 +2,16 @@ extern crate strum;
 #[macro_use]
 extern crate strum_macros;
 
-#[macro_use]
-extern crate snafu;
-
 mod devices;
 mod hotplug;
 mod midi;
 mod tui;
 
-use midir::{MidiInput, MidiOutput};
+use midir::{ MidiOutput};
 use structopt::StructOpt;
 use strum::{IntoEnumIterator};
 
-use std::error::Error;
-use crate::devices::{DeviceError, DeviceType, Descriptor, Device};
+use crate::devices::{DeviceError, DeviceType};
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -97,13 +93,9 @@ enum List {
     },
 }
 
-use crate::List::Devices;
-use snafu::{IntoError, OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use crate::devices::Bounds;
-
-
-type Result<T, E = DeviceError> = std::result::Result<T, E>;
+use crate::midi::CLIENT_NAME;
 
 fn main() -> midi::Result<()> {
     let app = LaBruteForce::from_args();
@@ -114,16 +106,19 @@ fn main() -> midi::Result<()> {
             let mut tui = tui::build_tui();
             tui.run();
         },
-        Command::Watch { device } => {
-            hotplug::watch();
-        }
+        Command::Watch { device: _ } => {
+            hotplug::watch()?;
+        },
         Command::List { subcmd } => {
             let subcmd = subcmd.unwrap_or(List::Ports);
             match subcmd {
-                List::Ports => midi::output_ports().iter()
-                        .for_each(|port| println!("{}", port.name)),
+                List::Ports => {
+                    let midi_client = MidiOutput::new(CLIENT_NAME)?;
+                    midi::output_ports(&midi_client).iter()
+                        .for_each(|port| println!("{}", port.name))
+                },
                 List::Devices => DeviceType::iter()
-                    .for_each(|dev| println!("{}", dev.into())),
+                    .for_each(|dev| println!("{}", dev)),
                 List::Params { device_name } => {
                     let dev = DeviceType::from_str(&device_name)?;
                     for param in dev.descriptor().parameters() {
@@ -132,7 +127,7 @@ fn main() -> midi::Result<()> {
                 }
                 List::Bounds { device_name, param_name } => {
                     let dev = DeviceType::from_str(&device_name)?;
-                    match dev.descriptor().bounds(&param_name) {
+                    match dev.descriptor().bounds(&param_name)? {
                         Bounds::Discrete(values) =>
                             for bound in values {
                                 println!("{}", bound.1)
@@ -141,32 +136,30 @@ fn main() -> midi::Result<()> {
                     }
                 }
             };
-        }
+        },
         Command::Set {
             device_name,
             param_name,
             value_name,
         } => {
-            let dev = DeviceType::from_str(&device_name)
-                .map_err(|_err| DeviceError::UnknownDevice { device_name: device_name.to_owned() })?;
-            let port = dev.descriptor().ports().get(0)
-                .ok_or(DeviceError::NoConnectedDevice { device_name: device_name.to_owned() })?;
-            let sysex = dev.descriptor().connect(port)?;
+            let dev = DeviceType::from_str(&device_name)?.descriptor();
+            let midi_client = MidiOutput::new(CLIENT_NAME)?;
+            let mut sysex = dev.connect(midi_client, dev.ports().get(0).expect("FUCK RUST ERRORS"))?;
             sysex.update(&param_name, &value_name)?;
-        }
+        },
         Command::Get {
             device_name,
             param_names,
         } => {
-            let dev = DeviceType::from_str(device_name);
-            let port = dev.ports().iter().first().ok()?;
-            let sysex = dev.connect(port)?;
-            for pair in sysex.query(param_names)? {
+            let dev = DeviceType::from_str(&device_name)?.descriptor();
+            let midi_client = MidiOutput::new(CLIENT_NAME)?;
+            let port = dev.ports().get(0).cloned()
+                .ok_or(DeviceError::NoOutputPort {port_name: device_name})?;
+            let mut sysex = dev.connect(midi_client, &port)?;
+            for pair in sysex.query(param_names.as_slice())? {
                 println!("{} {}", pair.0, pair.1)
             }
-        }
-
-        _ => (),
+        },
     }
 
     Ok(())

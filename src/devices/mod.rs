@@ -1,29 +1,27 @@
-use linked_hash_map::LinkedHashMap;
 use std::iter::Iterator;
 
 use crate::midi::{Result};
-use std::str::FromStr;
-use strum::IntoEnumIterator;
 use midir::MidiOutput;
 use crate::midi::MidiPort;
 
 //mod beatstep;
 mod microbrute;
 
+use snafu::{Snafu};
+
 pub type MidiValue = u8;
 
-pub type DeviceId = &'static str;
 pub type Parameter = &'static str;
 
-#[derive(Debug, EnumString, IntoStaticStr, EnumIter)]
+#[derive(Debug, EnumString, IntoStaticStr, EnumIter, Display)]
 pub enum DeviceType {
     MicroBrute,
 }
 
 impl DeviceType {
-    pub fn descriptor(&self) -> Box<Descriptor> {
+    pub fn descriptor(&self) -> Box<dyn Descriptor> {
         Box::new(match self {
-            MicroBrute => microbrute::MicroBruteDescriptor {}
+            DeviceType::MicroBrute => microbrute::MicroBruteDescriptor {}
         })
     }
 }
@@ -31,19 +29,18 @@ impl DeviceType {
 
 pub trait Descriptor {
     fn parameters(&self) -> Vec<Parameter>;
-    fn bounds(&self, param: Parameter) -> Bounds;
+    fn bounds(&self, param: &str) -> Result<Bounds>;
     fn ports(&self) -> Vec<MidiPort>;
-    fn connect(&self, port: &MidiPort) -> Result<Box<Device>>;
+    fn connect(&self, midi_client: MidiOutput, port: &MidiPort) -> Result<Box<dyn Device>>;
 }
 
 pub trait Device {
-    fn query(&mut self, params: &[Parameter]) -> Result<Vec<(Parameter, MidiValue)>>;
-    fn update(&mut self, param: Parameter, value: &str) -> Result<()>;
+    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, MidiValue)>>;
+    fn update(&mut self, param: &str, value: &str) -> Result<()>;
 }
 
 #[derive(Debug, Snafu)]
 pub enum DeviceError {
-    #[snafu(display("Invalid device name {}", device_name))]
     UnknownDevice {
         device_name: String,
     },
@@ -67,6 +64,10 @@ pub enum DeviceError {
     ValueOutOfBound {
         value_name: String,
     },
+    NoReply,
+    WrongId {
+        id: Vec<u8>,
+    }
 }
 
 
