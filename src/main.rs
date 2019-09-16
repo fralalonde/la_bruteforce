@@ -76,7 +76,7 @@ fn main() -> devices::Result<()> {
             for param in dev.descriptor().parameters() {
                 println!("{}", param);
             }
-        },
+        }
         Cmd::Bounds {
             device_name,
             param_name,
@@ -90,7 +90,7 @@ fn main() -> devices::Result<()> {
                 }
                 Bounds::Range(_offset, (lo, hi)) => println!("[{}..{}]", lo, hi),
             }
-        },
+        }
         Cmd::Set {
             device_name,
             param_name,
@@ -101,10 +101,10 @@ fn main() -> devices::Result<()> {
             let mut sysex =
                 dev.connect(midi_client, dev.ports().get(0).expect("FUCK RUST ERRORS"))?;
             sysex.update(&param_name, &value_name)?;
-        },
+        }
         Cmd::Get {
             device_name,
-            param_names,
+            mut param_names,
         } => {
             let dev = DeviceType::from_str(&device_name)?.descriptor();
             let midi_client = MidiOutput::new(CLIENT_NAME)?;
@@ -116,8 +116,11 @@ fn main() -> devices::Result<()> {
                     port_name: device_name,
                 })?;
             let mut sysex = dev.connect(midi_client, &port)?;
+            if param_names.is_empty() {
+                param_names = dev.parameters()
+            }
             for pair in sysex.query(param_names.as_slice())? {
-                println!("{} {}", pair.0, pair.1)
+                println!("{}:\t{}", pair.0, pair.1);
             }
         }
     }

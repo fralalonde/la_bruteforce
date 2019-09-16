@@ -1,13 +1,14 @@
 use self::MicrobruteParameter::*;
 use crate::devices::Bounds::*;
 use crate::devices::DeviceError;
-use crate::devices::{Bounds, Descriptor, Device, MidiValue, Parameter};
 use crate::devices::CLIENT_NAME;
 use crate::devices::{self, MidiPort};
+use crate::devices::{Bounds, Descriptor, Device, MidiValue};
 
 use devices::Result;
 use midir::{MidiOutput, MidiOutputConnection};
 use std::str::FromStr;
+use std::string::ToString;
 use strum::IntoEnumIterator;
 
 //            usb_vendor_id: 0x1c75,
@@ -16,7 +17,7 @@ use strum::IntoEnumIterator;
 //const MICROBRUTE_SYSEX_REQUEST: u8 = 0x06;
 //const MICROBRUTE_SYSEX_REPLY: u8 = 0x05;
 
-#[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr)]
+#[derive(Debug, AsRefStr, EnumString, IntoStaticStr, EnumIter)]
 enum MicrobruteParameter {
     KeyNotePriority,
     KeyVelocityResponse,
@@ -38,12 +39,15 @@ enum MicrobruteParameter {
 pub struct MicroBruteDescriptor {}
 
 impl Descriptor for MicroBruteDescriptor {
-    fn parameters(&self) -> Vec<Parameter> {
-        MicrobruteParameter::iter().map(|p| p.into()).collect()
+    fn parameters(&self) -> Vec<String> {
+        MicrobruteParameter::iter()
+            .map(|p| p.as_ref().to_owned())
+            .collect()
     }
 
     fn bounds(&self, param: &str) -> Result<Bounds> {
-        bounds(param)
+        let param = MicrobruteParameter::from_str(param)?;
+        Ok(bounds(&param))
     }
 
     fn ports(&self) -> Vec<MidiPort> {
@@ -72,9 +76,8 @@ impl Descriptor for MicroBruteDescriptor {
     }
 }
 
-fn bounds(param: &str) -> Result<Bounds> {
-    let p = MicrobruteParameter::from_str(param)?;
-    Ok(match p {
+fn bounds(param: &MicrobruteParameter) -> Bounds {
+    match param {
         KeyNotePriority => Discrete(vec![(0, "LastNote"), (1, "LowNote"), (2, "HighNote")]),
         KeyVelocityResponse => {
             Discrete(vec![(0, "Logarithmic"), (1, "Exponential"), (2, "Linear")])
@@ -96,7 +99,45 @@ fn bounds(param: &str) -> Result<Bounds> {
             (0x20, "1/32"),
         ]),
         SeqStepOn => Discrete(vec![(0, "Clock"), (1, "Gate")]),
-    })
+    }
+}
+
+fn bound_str(bounds: Bounds, vcode: u8) -> Option<String> {
+    match bounds {
+        Bounds::Discrete(values) => {
+            for v in &values {
+                if v.0 == vcode {
+                    return Some(v.1.to_string());
+                }
+            }
+        }
+        Bounds::Range(offset, (lo, hi)) => {
+            if vcode >= lo && vcode <= hi {
+                return Some((vcode + offset).to_string());
+            }
+        }
+    }
+    None
+}
+
+fn bound_code(bounds: Bounds, bound_id: &str) -> Option<u8> {
+    match bounds {
+        Bounds::Discrete(values) => {
+            for v in &values {
+                if v.1.eq(bound_id) {
+                    return Some(v.0);
+                }
+            }
+        }
+        Bounds::Range(offset, (lo, hi)) => {
+            if let Ok(val) = u8::from_str(bound_id) {
+                if val >= lo && val <= hi {
+                    return Some(val - offset);
+                }
+            }
+        }
+    }
+    None
 }
 
 pub struct MicroBruteDevice {
@@ -108,67 +149,63 @@ pub struct MicroBruteDevice {
 impl MicroBruteDevice {
     // TODO return device version / id string
     fn identify(&mut self) -> Result<()> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name)?;
+        let sysex_replies = devices::sysex_query_init(
+            &self.port_name,
+            || Some(DeviceError::NoReply),
+            |_ts, msg, payload| {
+                if msg.starts_with(&[
+                    0xf0, 0x7e, 0x01, /* arturia1 */ 0x06, /* arturia2 */ 0x02, 0x00,
+                    0x20, 0x6b, 0x04, 0x00, 0x02, 0x01, /* major version */ 0x01,
+                    0x00,
+                    // remaining 0x00, /* minor version */ 0x03, 0x02, 0xf7]) {
+                ]) {
+                    *payload = None
+                } else {
+                    *payload = Some(DeviceError::WrongDeviceId { id: msg.to_vec() })
+                }
+            },
+        )?;
         self.midi_connection
             .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
-        let id = sysex_replies
-            .close_wait(500)
-            .get(0)
-            .cloned()
-            .ok_or(DeviceError::NoReply)?;
 
-        if !id.as_slice().starts_with(&[
-            0xf0, 0x7e, 0x01, /* arturia1 */ 0x06, /* arturia2 */ 0x02, 0x00, 0x20, 0x6b,
-            0x04, 0x00, 0x02, 0x01, /* major version */ 0x01, 0x00,
-            // remaining 0x00, /* minor version */ 0x03, 0x02, 0xf7]) {
-        ]) {
-            Err(Box::new(DeviceError::WrongId { id: id.to_vec() }))
-        } else {
-            self.sysex_counter += 1;
-            Ok(())
+        if let Some(err) = sysex_replies.close_wait(500) {
+            return Err(Box::new(err));
         }
+        self.sysex_counter += 1;
+        Ok(())
     }
 }
 
 impl Device for MicroBruteDevice {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, MidiValue)>> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name)?;
+    fn query(&mut self, params: &[String]) -> Result<Vec<(String, String)>> {
+        let sysex_replies = devices::sysex_query_init(
+            &self.port_name,
+            || vec![],
+            |_ts, msg, payload| {
+                let pcode = msg[8];
+                let vcode = msg[9];
+                if let Some(param) = sysex_reply_code(pcode) {
+                    if let Some(value_str) = bound_str(bounds(&param), vcode) {
+                        payload.push((param.as_ref().to_string(), value_str));
+                    }
+                }
+            },
+        )?;
         for param in params {
             let p = MicrobruteParameter::from_str(param)?;
             self.midi_connection
                 .send(&sysex_query_msg(self.sysex_counter, sysex_query(p)))?;
             self.sysex_counter += 1;
         }
-        Ok(sysex_replies
-            .close_wait(500)
-            .iter()
-            .map(|msg| {
-                let z = sysex_reply_code(msg[8]);
-                let p = match z {
-                    Some(p) => p.into(),
-                    None => "Unknown param",
-                };
-                (p, msg[9])
-            })
-            .collect())
+        Ok(sysex_replies.close_wait(500))
     }
 
-    fn update(&mut self, param: &str, value: &str) -> Result<()> {
-        let p = MicrobruteParameter::from_str(param)?;
-        let v = match bounds(param)? {
-            Bounds::Discrete(values) => {
-                values
-                    .iter()
-                    .find(|d| d.1.eq(value))
-                    .expect("FUCK RUST ERRORS")
-                    .0
-            }
-            Bounds::Range(offset, (_lo, _hi)) => {
-                u8::from_str(value).expect("FUCK RUST ERRORS") - offset
-            }
-        };
+    fn update(&mut self, param_id: &str, value_id: &str) -> Result<()> {
+        let param = MicrobruteParameter::from_str(param_id)?;
+        let v = bound_code(bounds(&param), value_id)
+            .ok_or(DeviceError::ValueOutOfBound { value_name: value_id.to_string() })?;
         self.midi_connection
-            .send(&sysex_update_msg(self.sysex_counter, sysex_update(p), v))?;
+            .send(&sysex_update_msg(self.sysex_counter, sysex_update(param), v))?;
         self.sysex_counter += 1;
         Ok(())
     }

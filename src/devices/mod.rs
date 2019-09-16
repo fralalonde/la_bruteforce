@@ -42,32 +42,37 @@ fn input_port(midi: &MidiInput, name4: &str) -> Option<MidiPort> {
     None
 }
 
-pub fn sysex_query_init(port_name: &str) -> Result<SysexQuery> {
+pub fn sysex_query_init<R, INIT, ITEM>(
+    port_name: &str,
+    init_fn: INIT,
+    item_fn: ITEM,
+) -> Result<SysexQuery<R>>
+where
+    R: Send,
+    INIT: FnOnce() -> R,
+    ITEM: FnMut(u64, &[u8], &mut R) + Send + 'static,
+{
     let midi_in = MidiInput::new(CLIENT_NAME)?;
-    let in_port = input_port(&midi_in, port_name).expect("FUCK RUST ERRORS");
+    let in_port = input_port(&midi_in, port_name)
+        .ok_or(DeviceError::NoInputPort { port_name: port_name.to_string() })?;
     Ok(SysexQuery(midi_in.connect(
         in_port.number,
         "Query Results",
-        |_ts, message, results| {
-            if message[0] == 0xf0 && message[message.len() - 1] == 0xf7 {
-                results.push(message.to_vec());
-            }
-        },
-        Vec::new(),
+        item_fn,
+        init_fn(),
     )?))
 }
 
-pub struct SysexQuery(MidiInputConnection<Vec<Vec<u8>>>);
+pub struct SysexQuery<T: 'static>(MidiInputConnection<T>);
 
-impl SysexQuery {
-    pub fn close_wait(self, wait_millis: u64) -> Vec<Vec<u8>> {
+impl<T> SysexQuery<T> {
+    pub fn close_wait(self, wait_millis: u64) -> T {
         sleep(Duration::from_millis(wait_millis));
         self.0.close().1
     }
 }
 
 pub type MidiValue = u8;
-pub type Parameter = &'static str;
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, Display)]
 pub enum DeviceType {
@@ -83,14 +88,14 @@ impl DeviceType {
 }
 
 pub trait Descriptor {
-    fn parameters(&self) -> Vec<Parameter>;
+    fn parameters(&self) -> Vec<String>;
     fn bounds(&self, param: &str) -> Result<Bounds>;
     fn ports(&self) -> Vec<MidiPort>;
     fn connect(&self, midi_client: MidiOutput, port: &MidiPort) -> Result<Box<dyn Device>>;
 }
 
 pub trait Device {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, MidiValue)>>;
+    fn query(&mut self, params: &[String]) -> Result<Vec<(String, String)>>;
     fn update(&mut self, param: &str, value: &str) -> Result<()>;
 }
 
@@ -111,6 +116,9 @@ pub enum DeviceError {
     UnknownParameter {
         param_name: String,
     },
+    UnknownParameterCode {
+        code: u32,
+    },
     NoConnectedDevice {
         device_name: String,
     },
@@ -129,7 +137,20 @@ pub enum DeviceError {
         value_name: String,
     },
     NoReply,
-    WrongId {
+    WrongDeviceId {
         id: Vec<u8>,
     },
+}
+
+fn is_sysex<R, F>(next_filter: F) -> F
+    where F: FnMut(u64, &[u8], &mut R) + Send + 'static
+{
+    |ts, msg, state| {
+        let len = msg.length();
+        if len > 0
+            && msg[0] == 0xf0
+            && msg[len -1 ] {
+            next_filter(&msg[1..len - 1])
+        }
+    }
 }
