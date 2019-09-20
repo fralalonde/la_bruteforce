@@ -1,5 +1,5 @@
-use crate::devices::ParameterBounds::*;
-use crate::devices::{DeviceDescriptor, Param};
+use crate::device::ParameterBounds::*;
+use crate::device::{DeviceDescriptor, Param};
 
 pub fn beatstep() -> DeviceDescriptor {
     DeviceDescriptor {

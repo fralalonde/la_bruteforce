@@ -2,24 +2,29 @@ extern crate strum;
 #[macro_use]
 extern crate strum_macros;
 
-mod devices;
+mod device;
+mod error;
+mod midi;
 
 use midir::MidiOutput;
 use structopt::StructOpt;
 use strum::IntoEnumIterator;
 
-use crate::devices::{DeviceError, DeviceType};
+use crate::device::{DeviceType};
+use crate::error::{DeviceError};
+
+pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
     name = "la_bruteforce",
-    about = "La BruteForce is used to edit Arturia devices hidden parameters"
+    about = "La BruteForce is used to edit Arturia device hidden parameters"
 )]
 enum Cmd {
-    /// All active devices
+    /// All active device
     Ports,
 
-    /// All known devices
+    /// All known device
     Devices,
 
     /// A single device's possible parameters
@@ -56,17 +61,17 @@ enum Cmd {
     },
 }
 
-use crate::devices::Bounds;
-use crate::devices::CLIENT_NAME;
+use crate::device::Bounds;
+use crate::midi::CLIENT_NAME;
 use std::str::FromStr;
 
-fn main() -> devices::Result<()> {
+fn main() -> Result<()> {
     let cmd = Cmd::from_args();
 
     match cmd {
         Cmd::Ports => {
             let midi_client = MidiOutput::new(CLIENT_NAME)?;
-            devices::output_ports(&midi_client)
+            midi::output_ports(&midi_client)
                 .iter()
                 .for_each(|port| println!("{}", port.name))
         }
@@ -119,9 +124,7 @@ fn main() -> devices::Result<()> {
             if param_names.is_empty() {
                 param_names = dev.parameters()
             }
-            for pair in sysex.query(param_names.as_slice())? {
-                println!("{}:\t{}", pair.0, pair.1);
-            }
+            sysex.query(param_names.as_slice())?
         }
     }
 
