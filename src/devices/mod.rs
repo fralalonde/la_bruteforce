@@ -10,8 +10,8 @@ use snafu::Snafu;
 
 use std::time::Duration;
 
-use std::thread::sleep;
 use std::str::FromStr;
+use std::thread::sleep;
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -43,21 +43,26 @@ fn input_port(midi: &MidiInput, name4: &str) -> Option<MidiPort> {
     None
 }
 
-pub fn sysex_query_init(port_name: &str) -> Result<SysexQuery> {
+pub fn sysex_query_init(port_name: &str, match_header: &'static [u8]) -> Result<SysexQuery> {
     let midi_in = MidiInput::new(CLIENT_NAME)?;
     if let Some(in_port) = input_port(&midi_in, port_name) {
         Ok(SysexQuery(midi_in.connect(
             in_port.number,
             "Query Results",
-            |_ts, message, results| {
-                if message[0] == 0xf0 && message[message.len() - 1] == 0xf7 {
+            move |_ts, message, results| {
+                if message[0] == 0xf0
+                    && message[message.len() - 1] == 0xf7
+                    && message[1.. ].starts_with(match_header)
+                {
                     results.push(message.to_vec());
                 }
             },
             Vec::new(),
         )?))
     } else {
-        Err(Box::new(DeviceError::NoInputPort { port_name: port_name.to_string() }))
+        Err(Box::new(DeviceError::NoInputPort {
+            port_name: port_name.to_string(),
+        }))
     }
 }
 
@@ -139,20 +144,20 @@ pub enum DeviceError {
 }
 
 pub fn bound_str(bounds: Bounds, vcode: u8) -> Option<String> {
-        match bounds {
-                Bounds::Discrete(values) => {
-                    for v in &values {
-                            if v.0 == vcode {
-                                    return Some(v.1.to_string());
-                                }
-                            }
-                    }
-            Bounds::Range(offset, (lo, hi)) => {
-                    if vcode >= lo && vcode <= hi {
-                            return Some((vcode + offset).to_string());
-                        }
-                    }
+    match bounds {
+        Bounds::Discrete(values) => {
+            for v in &values {
+                if v.0 == vcode {
+                    return Some(v.1.to_string());
+                }
+            }
         }
+        Bounds::Range(offset, (lo, hi)) => {
+            if vcode >= lo && vcode <= hi {
+                return Some((vcode + offset).to_string());
+            }
+        }
+    }
     None
 }
 
@@ -175,4 +180,3 @@ pub fn bound_code(bounds: Bounds, bound_id: &str) -> Option<u8> {
     }
     None
 }
-

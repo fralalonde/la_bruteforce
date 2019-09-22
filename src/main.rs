@@ -76,7 +76,7 @@ fn main() -> devices::Result<()> {
             for param in dev.descriptor().parameters() {
                 println!("{}", param);
             }
-        },
+        }
         Cmd::Bounds {
             device_name,
             param_name,
@@ -90,7 +90,7 @@ fn main() -> devices::Result<()> {
                 }
                 Bounds::Range(_offset, (lo, hi)) => println!("[{}..{}]", lo, hi),
             }
-        },
+        }
         Cmd::Set {
             device_name,
             param_name,
@@ -102,9 +102,9 @@ fn main() -> devices::Result<()> {
                 let mut sysex = dev.connect(midi_client, port)?;
                 sysex.update(&param_name, &value_name)?;
             } else {
-                return Err(Box::new(DeviceError::NoConnectedDevice { device_name }))
+                return Err(Box::new(DeviceError::NoConnectedDevice { device_name }));
             }
-        },
+        }
         Cmd::Get {
             device_name,
             mut param_names,

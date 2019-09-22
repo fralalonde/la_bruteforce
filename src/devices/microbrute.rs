@@ -1,7 +1,7 @@
 use self::MicrobruteParameter::*;
 use crate::devices::Bounds::*;
 use crate::devices::DeviceError;
-use crate::devices::{Bounds, Descriptor, Device, MidiValue, Parameter};
+use crate::devices::{Bounds, Descriptor, Device, Parameter};
 use crate::devices::CLIENT_NAME;
 use crate::devices::{self, MidiPort};
 
@@ -14,7 +14,11 @@ use strum::IntoEnumIterator;
 //            usb_product_id: 0x0206,
 
 //const MICROBRUTE_SYSEX_REQUEST: u8 = 0x06;
-//const MICROBRUTE_SYSEX_REPLY: u8 = 0x05;
+const MICROBRUTE: &[u8] = &[0x00, 0x20, 0x6b, 0x05];
+
+const ARTURIA: &[u8] = &[0x00, 0x20, 0x6b];
+
+const REALTIME: &[u8] = &[0x7e];
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
 enum MicrobruteParameter {
@@ -107,7 +111,7 @@ pub struct MicroBruteDevice {
 impl MicroBruteDevice {
     // TODO return device version / id string
     fn identify(&mut self) -> Result<()> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name)?;
+        let sysex_replies = devices::sysex_query_init(&self.port_name, REALTIME)?;
         self.midi_connection
             .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
         let id = sysex_replies.close_wait(500)
@@ -130,11 +134,11 @@ impl MicroBruteDevice {
 
 impl Device for MicroBruteDevice {
     fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, String)>> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name)?;
-        for param in params {
-            let p = MicrobruteParameter::from_str(param)?;
+        let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE)?;
+        for param_str in params {
+            let param = MicrobruteParameter::from_str(param_str)?;
             self.midi_connection
-                .send(&sysex_query_msg(self.sysex_counter, p as u8 + 1))?;
+                .send(&sysex(MICROBRUTE, &[ 0x01, self.sysex_counter as u8, 0x00, param as u8 + 1 ]))?;
             self.sysex_counter += 1;
         }
         Ok(sysex_replies.close_wait(500).iter()
@@ -142,12 +146,12 @@ impl Device for MicroBruteDevice {
             .collect())
     }
 
-    fn update(&mut self, param: &str, value_id: &str) -> Result<()> {
-        let p = MicrobruteParameter::from_str(param)?;
-        let v = devices::bound_code(bounds(p), value_id)
+    fn update(&mut self, param_str: &str, value_id: &str) -> Result<()> {
+        let param = MicrobruteParameter::from_str(param_str)?;
+        let value = devices::bound_code(bounds(param), value_id)
             .ok_or(DeviceError::ValueOutOfBound { value_name: value_id.to_string() })?;
-        self.midi_connection
-            .send(&sysex_update_msg(self.sysex_counter, p as u8, v))?;
+        self.midi_connection.send(&sysex(MICROBRUTE, &[ 0x01, self.sysex_counter as u8,
+                0x01, param as u8, value ]))?;
         self.sysex_counter += 1;
         Ok(())
     }
@@ -168,33 +172,11 @@ fn into_param(code: u8) -> Option<MicrobruteParameter> {
     None
 }
 
-fn sysex_query_msg(counter: usize, param: u8) -> [u8; 10] {
-    [
-        0xf0,
-        0x00,
-        0x20,
-        0x6b,
-        0x05,
-        0x01,
-        counter as u8,
-        0x00,
-        param,
-        0xf7,
-    ]
-}
-
-fn sysex_update_msg(counter: usize, param: u8, value: MidiValue) -> [u8; 11] {
-    [
-        0xf0,
-        0x00,
-        0x20,
-        0x6b,
-        0x05,
-        0x01,
-        counter as u8,
-        0x01,
-        param as u8,
-        value,
-        0xf7,
-    ]
+fn sysex(vendor: &[u8],  payload: &[u8]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(2 + vendor.len() + payload.len());
+    msg.push(0xf0);
+    msg.extend_from_slice(vendor);
+    msg.extend_from_slice(payload);
+    msg.push(0xf7);
+    msg
 }
