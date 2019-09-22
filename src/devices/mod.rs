@@ -11,6 +11,7 @@ use snafu::Snafu;
 use std::time::Duration;
 
 use std::thread::sleep;
+use std::str::FromStr;
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -44,17 +45,20 @@ fn input_port(midi: &MidiInput, name4: &str) -> Option<MidiPort> {
 
 pub fn sysex_query_init(port_name: &str) -> Result<SysexQuery> {
     let midi_in = MidiInput::new(CLIENT_NAME)?;
-    let in_port = input_port(&midi_in, port_name).expect("FUCK RUST ERRORS");
-    Ok(SysexQuery(midi_in.connect(
-        in_port.number,
-        "Query Results",
-        |_ts, message, results| {
-            if message[0] == 0xf0 && message[message.len() - 1] == 0xf7 {
-                results.push(message.to_vec());
-            }
-        },
-        Vec::new(),
-    )?))
+    if let Some(in_port) = input_port(&midi_in, port_name) {
+        Ok(SysexQuery(midi_in.connect(
+            in_port.number,
+            "Query Results",
+            |_ts, message, results| {
+                if message[0] == 0xf0 && message[message.len() - 1] == 0xf7 {
+                    results.push(message.to_vec());
+                }
+            },
+            Vec::new(),
+        )?))
+    } else {
+        Err(Box::new(DeviceError::NoInputPort { port_name: port_name.to_string() }))
+    }
 }
 
 pub struct SysexQuery(MidiInputConnection<Vec<Vec<u8>>>);
@@ -90,7 +94,7 @@ pub trait Descriptor {
 }
 
 pub trait Device {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, MidiValue)>>;
+    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, String)>>;
     fn update(&mut self, param: &str, value: &str) -> Result<()>;
 }
 
@@ -133,3 +137,42 @@ pub enum DeviceError {
         id: Vec<u8>,
     },
 }
+
+pub fn bound_str(bounds: Bounds, vcode: u8) -> Option<String> {
+        match bounds {
+                Bounds::Discrete(values) => {
+                    for v in &values {
+                            if v.0 == vcode {
+                                    return Some(v.1.to_string());
+                                }
+                            }
+                    }
+            Bounds::Range(offset, (lo, hi)) => {
+                    if vcode >= lo && vcode <= hi {
+                            return Some((vcode + offset).to_string());
+                        }
+                    }
+        }
+    None
+}
+
+pub fn bound_code(bounds: Bounds, bound_id: &str) -> Option<u8> {
+    match bounds {
+        Bounds::Discrete(values) => {
+            for v in &values {
+                if v.1.eq(bound_id) {
+                    return Some(v.0);
+                }
+            }
+        }
+        Bounds::Range(offset, (lo, hi)) => {
+            if let Ok(val) = u8::from_str(bound_id) {
+                if val >= lo && val <= hi {
+                    return Some(val - offset);
+                }
+            }
+        }
+    }
+    None
+}
+

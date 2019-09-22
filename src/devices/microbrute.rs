@@ -16,22 +16,22 @@ use strum::IntoEnumIterator;
 //const MICROBRUTE_SYSEX_REQUEST: u8 = 0x06;
 //const MICROBRUTE_SYSEX_REPLY: u8 = 0x05;
 
-#[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr)]
+#[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
 enum MicrobruteParameter {
-    KeyNotePriority,
-    KeyVelocityResponse,
-    MidiRecvChan,
-    MidiSendChan,
-    LfoKeyRetrig,
-    EnvLegatoMode,
-    BendRange,
-    Gate,
-    Sync,
-    SeqPlay,
-    SeqKeyRetrig,
-    SeqNextSeq,
-    SeqStep,
-    SeqStepOn,
+    KeyNotePriority = 0x0b,
+    KeyVelocityResponse = 0x11,
+    MidiSendChan = 0x07,
+    MidiRecvChan = 0x05,
+    LfoKeyRetrig = 0x0f,
+    EnvLegatoMode = 0x0d,
+    BendRange = 0x2c,
+    Gate = 0x36,
+    Sync = 0x3c,
+    SeqPlay = 0x2e,
+    SeqKeyRetrig = 0x34,
+    SeqNextSeq = 0x32,
+    SeqStepOn = 0x2a,
+    SeqStep = 0x38
 }
 
 #[derive(Debug)]
@@ -43,7 +43,7 @@ impl Descriptor for MicroBruteDescriptor {
     }
 
     fn bounds(&self, param: &str) -> Result<Bounds> {
-        bounds(param)
+        Ok(bounds(MicrobruteParameter::from_str(param)?))
     }
 
     fn ports(&self) -> Vec<MidiPort> {
@@ -72,9 +72,8 @@ impl Descriptor for MicroBruteDescriptor {
     }
 }
 
-fn bounds(param: &str) -> Result<Bounds> {
-    let p = MicrobruteParameter::from_str(param)?;
-    Ok(match p {
+fn bounds(param: MicrobruteParameter) -> Bounds {
+    match param {
         KeyNotePriority => Discrete(vec![(0, "LastNote"), (1, "LowNote"), (2, "HighNote")]),
         KeyVelocityResponse => {
             Discrete(vec![(0, "Logarithmic"), (1, "Exponential"), (2, "Linear")])
@@ -96,7 +95,7 @@ fn bounds(param: &str) -> Result<Bounds> {
             (0x20, "1/32"),
         ]),
         SeqStepOn => Discrete(vec![(0, "Clock"), (1, "Gate")]),
-    })
+    }
 }
 
 pub struct MicroBruteDevice {
@@ -111,14 +110,13 @@ impl MicroBruteDevice {
         let sysex_replies = devices::sysex_query_init(&self.port_name)?;
         self.midi_connection
             .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
-        let id = sysex_replies
-            .close_wait(500)
+        let id = sysex_replies.close_wait(500)
             .get(0)
             .cloned()
             .ok_or(DeviceError::NoReply)?;
 
         if !id.as_slice().starts_with(&[
-            0xf0, 0x7e, 0x01, /* arturia1 */ 0x06, /* arturia2 */ 0x02, 0x00, 0x20, 0x6b,
+            0xf0, 0x7e, 0x01, 0x06, 0x02, 0x00, /* arturia */ 0x20, 0x6b,
             0x04, 0x00, 0x02, 0x01, /* major version */ 0x01, 0x00,
             // remaining 0x00, /* minor version */ 0x03, 0x02, 0xf7]) {
         ]) {
@@ -131,108 +129,43 @@ impl MicroBruteDevice {
 }
 
 impl Device for MicroBruteDevice {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, MidiValue)>> {
+    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, String)>> {
         let sysex_replies = devices::sysex_query_init(&self.port_name)?;
         for param in params {
             let p = MicrobruteParameter::from_str(param)?;
             self.midi_connection
-                .send(&sysex_query_msg(self.sysex_counter, sysex_query(p)))?;
+                .send(&sysex_query_msg(self.sysex_counter, p as u8 + 1))?;
             self.sysex_counter += 1;
         }
-        Ok(sysex_replies
-            .close_wait(500)
-            .iter()
-            .map(|msg| {
-                let z = sysex_reply_code(msg[8]);
-                let p = match z {
-                    Some(p) => p.into(),
-                    None => "Unknown param",
-                };
-                (p, msg[9])
-            })
+        Ok(sysex_replies.close_wait(500).iter()
+            .filter_map(|msg| decode(msg[8], msg[9]))
             .collect())
     }
 
-    fn update(&mut self, param: &str, value: &str) -> Result<()> {
+    fn update(&mut self, param: &str, value_id: &str) -> Result<()> {
         let p = MicrobruteParameter::from_str(param)?;
-        let v = match bounds(param)? {
-            Bounds::Discrete(values) => {
-                values
-                    .iter()
-                    .find(|d| d.1.eq(value))
-                    .expect("FUCK RUST ERRORS")
-                    .0
-            }
-            Bounds::Range(offset, (_lo, _hi)) => {
-                u8::from_str(value).expect("FUCK RUST ERRORS") - offset
-            }
-        };
+        let v = devices::bound_code(bounds(p), value_id)
+            .ok_or(DeviceError::ValueOutOfBound { value_name: value_id.to_string() })?;
         self.midi_connection
-            .send(&sysex_update_msg(self.sysex_counter, sysex_update(p), v))?;
+            .send(&sysex_update_msg(self.sysex_counter, p as u8, v))?;
         self.sysex_counter += 1;
         Ok(())
     }
 }
 
-/// The sysex parameter code without a following value.
-/// Used when querying device for current setting.
-/// The code is equal to the param's associated update_code + 1
-fn sysex_query(param: MicrobruteParameter) -> u8 {
-    match param {
-        KeyNotePriority => 0x0c,
-        KeyVelocityResponse => 0x12,
-        MidiRecvChan => 0x06,
-        MidiSendChan => 0x08,
-        LfoKeyRetrig => 0x10,
-        EnvLegatoMode => 0x0e,
-        BendRange => 0x2d,
-        Gate => 0x37,
-        Sync => 0x3d,
-        SeqPlay => 0x2f,
-        SeqKeyRetrig => 0x35,
-        SeqNextSeq => 0x33,
-        SeqStepOn => 0x2b,
-        SeqStep => 0x39,
-    }
+fn decode(pcode: u8, vcode: u8) -> Option<(&'static str, String)> {
+    into_param(pcode)
+        .and_then(|param| devices::bound_str(bounds(param), vcode)
+            .map(|bound| (param.into(), bound)))
 }
 
-fn sysex_update(param: MicrobruteParameter) -> u8 {
-    match param {
-        KeyNotePriority => 0x0b,
-        KeyVelocityResponse => 0x11,
-        MidiSendChan => 0x07,
-        MidiRecvChan => 0x05,
-        LfoKeyRetrig => 0x0f,
-        EnvLegatoMode => 0x0d,
-        BendRange => 0x2c,
-        Gate => 0x36,
-        Sync => 0x3c,
-        SeqPlay => 0x2e,
-        SeqKeyRetrig => 0x34,
-        SeqNextSeq => 0x32,
-        SeqStepOn => 0x2a,
-        SeqStep => 0x38,
+fn into_param(code: u8) -> Option<MicrobruteParameter> {
+    for p in MicrobruteParameter::iter() {
+        if p as u8 == code {
+            return Some(p)
+        }
     }
-}
-
-fn sysex_reply_code(code: u8) -> Option<MicrobruteParameter> {
-    match code {
-        0x0b => Some(KeyNotePriority),
-        0x11 => Some(KeyVelocityResponse),
-        0x07 => Some(MidiSendChan),
-        0x05 => Some(MidiRecvChan),
-        0x0f => Some(LfoKeyRetrig),
-        0x0d => Some(EnvLegatoMode),
-        0x2c => Some(BendRange),
-        0x36 => Some(Gate),
-        0x3c => Some(Sync),
-        0x2e => Some(SeqPlay),
-        0x34 => Some(SeqKeyRetrig),
-        0x32 => Some(SeqNextSeq),
-        0x2a => Some(SeqStepOn),
-        0x38 => Some(SeqStep),
-        _ => None,
-    }
+    None
 }
 
 fn sysex_query_msg(counter: usize, param: u8) -> [u8; 10] {

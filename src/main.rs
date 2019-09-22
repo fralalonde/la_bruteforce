@@ -98,13 +98,16 @@ fn main() -> devices::Result<()> {
         } => {
             let dev = DeviceType::from_str(&device_name)?.descriptor();
             let midi_client = MidiOutput::new(CLIENT_NAME)?;
-            let mut sysex =
-                dev.connect(midi_client, dev.ports().get(0).expect("FUCK RUST ERRORS"))?;
-            sysex.update(&param_name, &value_name)?;
+            if let Some(port) = dev.ports().get(0) {
+                let mut sysex = dev.connect(midi_client, port)?;
+                sysex.update(&param_name, &value_name)?;
+            } else {
+                return Err(Box::new(DeviceError::NoConnectedDevice { device_name }))
+            }
         },
         Cmd::Get {
             device_name,
-            param_names,
+            mut param_names,
         } => {
             let dev = DeviceType::from_str(&device_name)?.descriptor();
             let midi_client = MidiOutput::new(CLIENT_NAME)?;
@@ -116,6 +119,9 @@ fn main() -> devices::Result<()> {
                     port_name: device_name,
                 })?;
             let mut sysex = dev.connect(midi_client, &port)?;
+            if param_names.is_empty() {
+                param_names = dev.parameters().iter().map(|p| p.to_string()).collect();
+            }
             for pair in sysex.query(param_names.as_slice())? {
                 println!("{} {}", pair.0, pair.1)
             }
