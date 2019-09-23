@@ -149,12 +149,18 @@ dependencies = [
 name = "la_bruteforce"
 version = "6.6.6"
 dependencies = [
+ "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "midir 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "snafu 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "structopt 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "strum 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "strum_macros 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "libc"
@@ -436,6 +442,7 @@ dependencies = [
 "checksum coremidi-sys 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "07f05827cebb30dcd539ff1ac9bf6764f574a15fa147f8572f99d7617142f95e"
 "checksum doc-comment 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 "checksum heck 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "20564e78d53d2bb135c343b3f47714a56af2061f1c928fdb541dc7b9fdd94205"
+"checksum lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 "checksum libc 0.2.62 (registry+https://github.com/rust-lang/crates.io-index)" = "34fcd2c08d2f832f376f4173a231990fa5aef4e99fb569867318a227ef4c06ba"
 "checksum memalloc 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "df39d232f5c40b0891c10216992c2f250c054105cb1e56f0fc9032db6203ecc1"
 "checksum midir 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e653b919aca8b5f2697854f1819b33bfe49bcb3378abb0dbd834ce43ede9c7b1"

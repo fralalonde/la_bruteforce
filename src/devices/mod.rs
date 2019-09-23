@@ -12,10 +12,75 @@ use std::time::Duration;
 
 use std::str::FromStr;
 use std::thread::sleep;
+use std::fmt::{Display, Formatter};
+use std::fmt;
+
+use strum::IntoEnumIterator;
+use std::error::Error;
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
+
+pub struct Note {
+    note: u8,
+}
+
+impl Display for Note {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let oct = self.note / 12;
+        let n = self.note % 12;
+        let mut prev_note = NoteName::C;
+        for i in NoteName::iter() {
+            if i as u8 == n {
+                let z: &'static str = i.into();
+                f.write_fmt(format_args!("{}{}", z, oct))?;
+            } else if i as u8 > n {
+                let z: &'static str = prev_note.into();
+                f.write_fmt(format_args!("{}#{}", z, oct))?;
+            } else {
+                prev_note = i;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
+enum NoteName {
+    C = 0,
+    D = 2,
+    E = 4,
+    F = 5,
+    G = 7,
+    A = 9,
+    B = 11,
+}
+
+impl FromStr for Note {
+    type Err = Box<dyn Error>;
+
+    fn from_str(s: &str) -> ::std::result::Result<Self, Self::Err> {
+        let mut iter = s.chars();
+        let mut item = iter.next();
+        if let Some(n) = item {
+            let mut note = NoteName::from_str(&n.to_string())? as u8;
+            item = iter.next();
+            if let Some(sharp) = item {
+                if sharp == '#' {
+                    note = note + 1;
+                    item = iter.next();
+                }
+            }
+            let octave = match item {
+                Some(oct) => u8::from_str(&oct.to_string())?,
+                None => 0
+            };
+            return Ok(Note{ note: octave * 12 + note});
+        }
+        Err(Box::new(DeviceError::NoteParse {note: s.to_string()}))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MidiPort {
@@ -76,7 +141,7 @@ impl SysexQuery {
 }
 
 pub type MidiValue = u8;
-pub type Parameter = &'static str;
+//pub type Parameter = &'static str;
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, Display)]
 pub enum DeviceType {
@@ -92,14 +157,14 @@ impl DeviceType {
 }
 
 pub trait Descriptor {
-    fn parameters(&self) -> Vec<Parameter>;
+    fn parameters(&self) -> Vec<String>;
     fn bounds(&self, param: &str) -> Result<Bounds>;
     fn ports(&self) -> Vec<MidiPort>;
     fn connect(&self, midi_client: MidiOutput, port: &MidiPort) -> Result<Box<dyn Device>>;
 }
 
 pub trait Device {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, String)>>;
+    fn query(&mut self, params: &[String]) -> Result<Vec<(String, String)>>;
     fn update(&mut self, param: &str, value: &str) -> Result<()>;
 }
 
@@ -140,6 +205,9 @@ pub enum DeviceError {
     NoReply,
     WrongId {
         id: Vec<u8>,
+    },
+    NoteParse {
+        note: String
     },
 }
 

@@ -1,7 +1,7 @@
 use self::MicrobruteParameter::*;
 use crate::devices::Bounds::*;
 use crate::devices::DeviceError;
-use crate::devices::{Bounds, Descriptor, Device, Parameter};
+use crate::devices::{Bounds, Descriptor, Device};
 use crate::devices::CLIENT_NAME;
 use crate::devices::{self, MidiPort};
 
@@ -14,11 +14,51 @@ use strum::IntoEnumIterator;
 //            usb_product_id: 0x0206,
 
 //const MICROBRUTE_SYSEX_REQUEST: u8 = 0x06;
-const MICROBRUTE: &[u8] = &[0x00, 0x20, 0x6b, 0x05];
 
-const ARTURIA: &[u8] = &[0x00, 0x20, 0x6b];
+//static ARTURIA: &[u8] = &[0x00, 0x20, 0x6b];
 
-const REALTIME: &[u8] = &[0x7e];
+// UPDATE SEQ
+//0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
+
+//01 37 23 3a 00 00 01 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//01 38 23 3a 01 00 02 30 31 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//01 39 23 3a 02 00 04 30 31 7f 32 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//01 3a 23 3a 03 00 20 3c 30 7f 48 3c 7f 48 7f 3c 30 7f 48 3c 7f 48 7f 3c 30 7f 48 3c 7f 48 7f 3f 33 7f 3f 33 7f 41 7f
+//01 3b 23 3a 04 00 20 30 3c 48 46 30 43 3c 37 30 7f 41 48 30 3e 48 3e 33 3a 3f 48 33 46 3f 3a 33 7f 3e 48 33 48 3e 40
+//01 3c 23 3a 05 00 20 30 7f 7f 3c 30 7f 3c 7f 3c 7f 7f 48 3c 7f 3c 7f 30 7f 7f 3c 30 7f 3c 7f 41 7f 7f 41 7f 7f 44 7f
+
+//01 seq 23 3a 05 20 20 30 7f 7f 3c 30 7f 3c 7f 3c 7f 7f 48 3c 7f 3c 7f 30 7f 7f 3c 30 7f 3c 7f 35 41 34 40 33 3f 32 31
+//01 seq 23 3a 06 00 20 3c 48 30 3c 3c 7f 7f 30 3c 48 7f 3c 3c 7f 7f 49 30 48 3c 3d 3c 7f 48 54 48 30 4f 52 30 4d 51 46
+//01 seq 23 3a 07 00 20 30 30 7f 7f 48 3c 30 30 7f 7f 30 7f 48 7f 52 7f 30 30 7f 7f 48 3c 30 30 7f 7f 30 7f 48 7f 4b 7f
+//01 seq 23 3a 07 20 20 30 30 7f 7f 48 31 30 30 7f 7f 3c 7f 48 7f 52 7f 30 30 7f 7f 7f 7f 30 30 7f 30 30 7f 7f 30 7f 7f
+
+// QUERY
+//inquiry1  01 59 00 37
+//reply     01 59 01 36 02 01 00 00 00 00 00 00 00  // 01 = major version?
+//inquiry2  01 5a 00 39
+//reply     01 5a 01 38 08 04 00 00 00 00 00 00 00  // 04 = minor version?
+
+// SEQ 1
+//0x01 MSGID(u8) 0x03,0x3b(SEQ) SEQ_IDX(u8 0 - 7) 0x00 SEQ_OFFSET(u8) SEQ_LEN(0x20)
+//getseq1   01 5b 03 3b 00 00 20
+// repeat with offset 0x20 for notes 33-64 (maybe)
+//getseq2   01 5c 03 3b 00 20 20
+
+//0x01 MSGID(u8) SEQ(0x23) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
+//repseq1a   01 5b 23 3a 00 00 20 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//repseq1b   01 5c 23 3a 00 20 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//
+//repseq2a   01 32 23 3a 01 00 20 3c 3c 3c 30 3c 3c 3c 48 3c 3c 3c 30 3c 3c 48 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//repseq2a   01 33 23 3a 01 20 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+
+//0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start C0 0x30, C#0 0x31)
+
+static MICROBRUTE: &[u8] = &[0x00, 0x20, 0x6b, 0x05];
+
+static REALTIME: u8 = 0x7e;
+
+static IDENTITY_REPLY: &[u8] = &[REALTIME, 0x01, 0x06, 0x02];
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
 enum MicrobruteParameter {
@@ -38,12 +78,15 @@ enum MicrobruteParameter {
     SeqStep = 0x38
 }
 
+
+
 #[derive(Debug)]
 pub struct MicroBruteDescriptor {}
 
 impl Descriptor for MicroBruteDescriptor {
-    fn parameters(&self) -> Vec<Parameter> {
-        MicrobruteParameter::iter().map(|p| p.into()).collect()
+    fn parameters(&self) -> Vec<String> {
+        // TODO append sequence identifiers
+        MicrobruteParameter::iter().map(|p| p.as_ref().to_string()).collect()
     }
 
     fn bounds(&self, param: &str) -> Result<Bounds> {
@@ -69,7 +112,7 @@ impl Descriptor for MicroBruteDescriptor {
         let mut brute = Box::new(MicroBruteDevice {
             midi_connection,
             port_name: port.name.to_owned(),
-            sysex_counter: 0,
+            msg_id: 0,
         });
         brute.identify()?;
         Ok(brute)
@@ -105,13 +148,13 @@ fn bounds(param: MicrobruteParameter) -> Bounds {
 pub struct MicroBruteDevice {
     midi_connection: MidiOutputConnection,
     port_name: String,
-    sysex_counter: usize,
+    msg_id: usize,
 }
 
 impl MicroBruteDevice {
     // TODO return device version / id string
     fn identify(&mut self) -> Result<()> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name, REALTIME)?;
+        let sysex_replies = devices::sysex_query_init(&self.port_name, IDENTITY_REPLY)?;
         self.midi_connection
             .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
         let id = sysex_replies.close_wait(500)
@@ -126,20 +169,20 @@ impl MicroBruteDevice {
         ]) {
             Err(Box::new(DeviceError::WrongId { id: id.to_vec() }))
         } else {
-            self.sysex_counter += 1;
+            self.msg_id += 1;
             Ok(())
         }
     }
 }
 
 impl Device for MicroBruteDevice {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(Parameter, String)>> {
+    fn query(&mut self, params: &[String]) -> Result<Vec<(String, String)>> {
         let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE)?;
         for param_str in params {
             let param = MicrobruteParameter::from_str(param_str)?;
             self.midi_connection
-                .send(&sysex(MICROBRUTE, &[ 0x01, self.sysex_counter as u8, 0x00, param as u8 + 1 ]))?;
-            self.sysex_counter += 1;
+                .send(&sysex(MICROBRUTE, &[ 0x01, self.msg_id as u8, 0x00, param as u8 + 1 ]))?;
+            self.msg_id += 1;
         }
         Ok(sysex_replies.close_wait(500).iter()
             .filter_map(|msg| decode(msg[8], msg[9]))
@@ -150,17 +193,17 @@ impl Device for MicroBruteDevice {
         let param = MicrobruteParameter::from_str(param_str)?;
         let value = devices::bound_code(bounds(param), value_id)
             .ok_or(DeviceError::ValueOutOfBound { value_name: value_id.to_string() })?;
-        self.midi_connection.send(&sysex(MICROBRUTE, &[ 0x01, self.sysex_counter as u8,
+        self.midi_connection.send(&sysex(MICROBRUTE, &[ 0x01, self.msg_id as u8,
                 0x01, param as u8, value ]))?;
-        self.sysex_counter += 1;
+        self.msg_id += 1;
         Ok(())
     }
 }
 
-fn decode(pcode: u8, vcode: u8) -> Option<(&'static str, String)> {
+fn decode(pcode: u8, vcode: u8) -> Option<(String, String)> {
     into_param(pcode)
         .and_then(|param| devices::bound_str(bounds(param), vcode)
-            .map(|bound| (param.into(), bound)))
+            .map(|bound| (param.as_ref().to_string(), bound)))
 }
 
 fn into_param(code: u8) -> Option<MicrobruteParameter> {
