@@ -142,7 +142,6 @@ impl SysexQuery {
 }
 
 pub type MidiValue = u8;
-//pub type Parameter = &'static str;
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, Display)]
 pub enum DeviceType {
@@ -165,7 +164,7 @@ pub trait Descriptor {
 }
 
 pub trait Device {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(String, String)>>;
+    fn query(&mut self, params: &[String]) -> Result<Vec<(String, Vec<String>)>>;
     fn update(&mut self, param: &str, value_ids: &[String]) -> Result<()>;
 }
 
@@ -189,6 +188,7 @@ pub enum DeviceError {
     UnknownParameter {
         param_name: String,
     },
+    EmptyParameter,
     UnknownValue {
         value_id: String,
     },

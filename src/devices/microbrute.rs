@@ -79,9 +79,9 @@ enum MicrobruteGlobals {
     Seq(u8) ,
 }
 
-impl From<MicrobruteGlobals> for u8 {
-    fn from(g: MicrobruteGlobals) -> Self {
-        match g {
+impl MicrobruteGlobals {
+    fn sysex_data_code(&self) -> u8 {
+        match self {
             KeyNotePriority => 0x0b,
             KeyVelocityResponse => 0x11,
             MidiSendChan => 0x07,
@@ -99,9 +99,11 @@ impl From<MicrobruteGlobals> for u8 {
             Seq(_) => 0x3a,
         }
     }
-}
 
-impl MicrobruteGlobals {
+    fn sysex_query_code(&self) -> u8 {
+        self.sysex_data_code() + 1
+    }
+
     /// low index is always 1
     fn max_index(&self) -> Option<usize> {
         match self {
@@ -110,15 +112,31 @@ impl MicrobruteGlobals {
         }
     }
 
-    fn parse(s: &str) -> Result<Self> {
-        Ok(MicrobruteGlobals::from_str(s).unwrap_or_else(|_err|  {
-            let parts: Vec<&str> = s.split("/").collect();
-            match &parts[..] {
-                [param, idx] => Seq(1/*u8::from_str(idx)?*/),
-                _ => Seq(2)
-            }
-        }))
+    fn index(&self) -> Option<u8> {
+        match self {
+            Seq(idx) => Some(*idx),
+            _ => None
+        }
     }
+
+    fn parse(s: &str) -> Result<Self> {
+        let mut parts = s.split("/");
+        if let Some(name) = parts.next() {
+            if let Some(idx) = parts.next() {
+                // idx starts from 1, internally starts from 0
+                let idx = u8::from_str(idx)? - 1;
+                match name {
+                    "Seq" => Ok(Seq(idx)),
+                    _ => Err(Box::new(DeviceError::UnknownParameter {param_name: s.to_owned()}))
+                }
+            } else {
+                Ok(MicrobruteGlobals::from_str(s)?)
+            }
+        } else {
+            return Err(Box::new(DeviceError::EmptyParameter))
+        }
+    }
+
 }
 
 #[derive(Debug)]
@@ -224,24 +242,36 @@ impl MicroBruteDevice {
 }
 
 impl Device for MicroBruteDevice {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(String, String)>> {
+    fn query(&mut self, params: &[String]) -> Result<Vec<(String, Vec<String>)>> {
         let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE)?;
         for param_str in params {
             let param = MicrobruteGlobals::parse(param_str)?;
-            let p: u8 = param.into();
-            self.midi_connection
-                .send(&sysex(MICROBRUTE, &[ 0x01, self.msg_id as u8, 0x00, p + 1]))?;
-            self.msg_id += 1;
+            let query_code  =param.sysex_query_code();
+            match param.index() {
+                Some(idx) => {
+                    self.midi_connection
+                        .send(&sysex(MICROBRUTE, &[0x01, self.msg_id as u8, 0x03, query_code, idx, 0x00, 0x20]))?;
+                    self.msg_id += 1;
+                    self.midi_connection
+                        .send(&sysex(MICROBRUTE, &[0x01, self.msg_id as u8, 0x03, query_code, idx, 0x20, 0x20]))?;
+                    self.msg_id += 1;
+                },
+                None => {
+                    self.midi_connection
+                    .send(&sysex(MICROBRUTE, &[0x01, self.msg_id as u8, 0x00, query_code]))?;
+                    self.msg_id += 1;
+                }
+            }
         }
         Ok(sysex_replies.close_wait(500).iter()
-            .filter_map(|msg| decode(msg[8], msg[9]))
+            .filter_map(|msg| decode(msg))
             .collect())
     }
 
     fn update(&mut self, param_str: &str, value_ids: &[String]) -> Result<()> {
         let param = MicrobruteGlobals::parse(param_str)?;
         let bounds = bounds(param);
-        let mut body = vec![ 0x01, self.msg_id as u8, 0x01, param.into() ];
+        let mut body = vec![ 0x01, self.msg_id as u8, 0x01, param.sysex_data_code() ];
         body.append(&mut devices::bound_codes(bounds, value_ids)?);
         self.midi_connection.send(&sysex(MICROBRUTE, &body))?;
         self.msg_id += 1;
@@ -249,17 +279,23 @@ impl Device for MicroBruteDevice {
     }
 }
 
-fn decode(pcode: u8, vcode: u8) -> Option<(String, String)> {
-    into_param(pcode)
-        .and_then(|param| devices::bound_str(bounds(param), &[vcode])
-            .map(|bound| (param.as_ref().to_string(), bound)))
+fn decode(msg: &[u8]) -> Option<(String, Vec<String>)> {
+    let param = into_param(msg);
+    match param {
+        Some(Seq(idx)) => { None },
+        Some(param) => devices::bound_str(bounds(param), &[msg[9]])
+            .map(|bound| (param.as_ref().to_string(), vec![bound])),
+        _ => None
+    }
 }
 
-fn into_param(code: u8) -> Option<MicrobruteGlobals> {
+fn into_param(msg: &[u8]) -> Option<MicrobruteGlobals> {
     for p in MicrobruteGlobals::iter() {
-        let pcode: u8 = p.into();
-        if pcode == code {
-            return Some(p)
+        if p.sysex_data_code() == msg[8] {
+            match p {
+                Seq(_) => return Some(Seq(msg[9])),
+                _ => return Some(p)
+            }
         }
     }
     None
