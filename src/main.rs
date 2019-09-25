@@ -55,7 +55,7 @@ enum Cmd {
         /// Name of the param as listed
         param_name: String,
         /// New bound value of the param
-        value_name: String,
+        value_ids: Vec<String>,
     },
 }
 
@@ -76,7 +76,7 @@ fn main() -> devices::Result<()> {
         Cmd::Devices => DeviceType::iter().for_each(|dev| println!("{}", dev)),
         Cmd::Params { device_name } => {
             let dev = DeviceType::from_str(&device_name)?;
-            for param in dev.descriptor().parameters() {
+            for param in dev.descriptor().globals() {
                 println!("{}", param);
             }
         }
@@ -92,18 +92,19 @@ fn main() -> devices::Result<()> {
                     }
                 }
                 Bounds::Range(_offset, (lo, hi)) => println!("[{}..{}]", lo, hi),
+                Bounds::NoteSeq => println!("note,note,note..."),
             }
         }
         Cmd::Set {
             device_name,
             param_name,
-            value_name,
+            value_ids,
         } => {
             let dev = DeviceType::from_str(&device_name)?.descriptor();
             let midi_client = MidiOutput::new(CLIENT_NAME)?;
             if let Some(port) = dev.ports().get(0) {
                 let mut sysex = dev.connect(midi_client, port)?;
-                sysex.update(&param_name, &value_name)?;
+                sysex.update(&param_name, &value_ids)?;
             } else {
                 return Err(Box::new(DeviceError::NoConnectedDevice { device_name }));
             }
@@ -123,7 +124,7 @@ fn main() -> devices::Result<()> {
                 })?;
             let mut sysex = dev.connect(midi_client, &port)?;
             if param_names.is_empty() {
-                param_names = dev.parameters().iter().map(|p| p.to_string()).collect();
+                param_names = dev.globals().iter().map(|p| p.to_string()).collect();
             }
             for pair in sysex.query(param_names.as_slice())? {
                 println!("{} {}", pair.0, pair.1)

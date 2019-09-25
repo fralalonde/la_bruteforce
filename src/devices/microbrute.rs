@@ -1,4 +1,4 @@
-use self::MicrobruteParameter::*;
+use self::MicrobruteGlobals::*;
 use crate::devices::Bounds::*;
 use crate::devices::DeviceError;
 use crate::devices::{Bounds, Descriptor, Device};
@@ -8,7 +8,7 @@ use crate::devices::{self, MidiPort};
 use devices::Result;
 use midir::{MidiOutput, MidiOutputConnection};
 use std::str::FromStr;
-use strum::IntoEnumIterator;
+use strum::{IntoEnumIterator};
 
 //            usb_vendor_id: 0x1c75,
 //            usb_product_id: 0x0206,
@@ -61,36 +61,83 @@ static REALTIME: u8 = 0x7e;
 static IDENTITY_REPLY: &[u8] = &[REALTIME, 0x01, 0x06, 0x02];
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
-enum MicrobruteParameter {
-    KeyNotePriority = 0x0b,
-    KeyVelocityResponse = 0x11,
-    MidiSendChan = 0x07,
-    MidiRecvChan = 0x05,
-    LfoKeyRetrig = 0x0f,
-    EnvLegatoMode = 0x0d,
-    BendRange = 0x2c,
-    Gate = 0x36,
-    Sync = 0x3c,
-    SeqPlay = 0x2e,
-    SeqKeyRetrig = 0x34,
-    SeqNextSeq = 0x32,
-    SeqStepOn = 0x2a,
-    SeqStep = 0x38
+enum MicrobruteGlobals {
+    KeyNotePriority ,
+    KeyVelocityResponse ,
+    MidiSendChan ,
+    MidiRecvChan ,
+    LfoKeyRetrig ,
+    EnvLegatoMode ,
+    BendRange ,
+    Gate ,
+    Sync ,
+    SeqPlay ,
+    SeqKeyRetrig ,
+    SeqNextSeq ,
+    SeqStepOn ,
+    SeqStep ,
+    Seq(u8) ,
 }
 
+impl From<MicrobruteGlobals> for u8 {
+    fn from(g: MicrobruteGlobals) -> Self {
+        match g {
+            KeyNotePriority => 0x0b,
+            KeyVelocityResponse => 0x11,
+            MidiSendChan => 0x07,
+            MidiRecvChan => 0x05,
+            LfoKeyRetrig => 0x0f,
+            EnvLegatoMode => 0x0d,
+            BendRange => 0x2c,
+            Gate => 0x36,
+            Sync => 0x3c,
+            SeqPlay => 0x2e,
+            SeqKeyRetrig => 0x34,
+            SeqNextSeq => 0x32,
+            SeqStepOn => 0x2a,
+            SeqStep => 0x38,
+            Seq(_) => 0x3a,
+        }
+    }
+}
 
+impl MicrobruteGlobals {
+    /// low index is always 1
+    fn max_index(&self) -> Option<usize> {
+        match self {
+            Seq(_) => Some(8),
+            _ => None,
+        }
+    }
+
+    fn parse(s: &str) -> Result<Self> {
+        Ok(MicrobruteGlobals::from_str(s).unwrap_or_else(|_err|  {
+            let parts: Vec<&str> = s.split("/").collect();
+            match &parts[..] {
+                [param, idx] => Seq(1/*u8::from_str(idx)?*/),
+                _ => Seq(2)
+            }
+        }))
+    }
+}
 
 #[derive(Debug)]
 pub struct MicroBruteDescriptor {}
 
 impl Descriptor for MicroBruteDescriptor {
-    fn parameters(&self) -> Vec<String> {
-        // TODO append sequence identifiers
-        MicrobruteParameter::iter().map(|p| p.as_ref().to_string()).collect()
+    fn globals(&self) -> Vec<String> {
+        MicrobruteGlobals::iter()
+            .flat_map(|p|
+                if let Some(max) = p.max_index() {
+                    (1..=max).map(|idx| format!("{}/{}", p.as_ref(), idx)).collect()
+                } else {
+                    vec![p.as_ref().to_string()]
+                })
+            .collect()
     }
 
     fn bounds(&self, param: &str) -> Result<Bounds> {
-        Ok(bounds(MicrobruteParameter::from_str(param)?))
+        Ok(bounds(MicrobruteGlobals::parse(param)?))
     }
 
     fn ports(&self) -> Vec<MidiPort> {
@@ -119,7 +166,7 @@ impl Descriptor for MicroBruteDescriptor {
     }
 }
 
-fn bounds(param: MicrobruteParameter) -> Bounds {
+fn bounds(param: MicrobruteGlobals) -> Bounds {
     match param {
         KeyNotePriority => Discrete(vec![(0, "LastNote"), (1, "LowNote"), (2, "HighNote")]),
         KeyVelocityResponse => {
@@ -142,6 +189,7 @@ fn bounds(param: MicrobruteParameter) -> Bounds {
             (0x20, "1/32"),
         ]),
         SeqStepOn => Discrete(vec![(0, "Clock"), (1, "Gate")]),
+        Seq(_) => NoteSeq
     }
 }
 
@@ -179,9 +227,10 @@ impl Device for MicroBruteDevice {
     fn query(&mut self, params: &[String]) -> Result<Vec<(String, String)>> {
         let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE)?;
         for param_str in params {
-            let param = MicrobruteParameter::from_str(param_str)?;
+            let param = MicrobruteGlobals::parse(param_str)?;
+            let p: u8 = param.into();
             self.midi_connection
-                .send(&sysex(MICROBRUTE, &[ 0x01, self.msg_id as u8, 0x00, param as u8 + 1 ]))?;
+                .send(&sysex(MICROBRUTE, &[ 0x01, self.msg_id as u8, 0x00, p + 1]))?;
             self.msg_id += 1;
         }
         Ok(sysex_replies.close_wait(500).iter()
@@ -189,12 +238,12 @@ impl Device for MicroBruteDevice {
             .collect())
     }
 
-    fn update(&mut self, param_str: &str, value_id: &str) -> Result<()> {
-        let param = MicrobruteParameter::from_str(param_str)?;
-        let value = devices::bound_code(bounds(param), value_id)
-            .ok_or(DeviceError::ValueOutOfBound { value_name: value_id.to_string() })?;
-        self.midi_connection.send(&sysex(MICROBRUTE, &[ 0x01, self.msg_id as u8,
-                0x01, param as u8, value ]))?;
+    fn update(&mut self, param_str: &str, value_ids: &[String]) -> Result<()> {
+        let param = MicrobruteGlobals::parse(param_str)?;
+        let bounds = bounds(param);
+        let mut body = vec![ 0x01, self.msg_id as u8, 0x01, param.into() ];
+        body.append(&mut devices::bound_codes(bounds, value_ids)?);
+        self.midi_connection.send(&sysex(MICROBRUTE, &body))?;
         self.msg_id += 1;
         Ok(())
     }
@@ -202,13 +251,14 @@ impl Device for MicroBruteDevice {
 
 fn decode(pcode: u8, vcode: u8) -> Option<(String, String)> {
     into_param(pcode)
-        .and_then(|param| devices::bound_str(bounds(param), vcode)
+        .and_then(|param| devices::bound_str(bounds(param), &[vcode])
             .map(|bound| (param.as_ref().to_string(), bound)))
 }
 
-fn into_param(code: u8) -> Option<MicrobruteParameter> {
-    for p in MicrobruteParameter::iter() {
-        if p as u8 == code {
+fn into_param(code: u8) -> Option<MicrobruteGlobals> {
+    for p in MicrobruteGlobals::iter() {
+        let pcode: u8 = p.into();
+        if pcode == code {
             return Some(p)
         }
     }

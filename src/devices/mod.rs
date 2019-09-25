@@ -18,6 +18,7 @@ use std::fmt;
 use strum::IntoEnumIterator;
 use std::error::Error;
 
+
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
@@ -157,7 +158,7 @@ impl DeviceType {
 }
 
 pub trait Descriptor {
-    fn parameters(&self) -> Vec<String>;
+    fn globals(&self) -> Vec<String>;
     fn bounds(&self, param: &str) -> Result<Bounds>;
     fn ports(&self) -> Vec<MidiPort>;
     fn connect(&self, midi_client: MidiOutput, port: &MidiPort) -> Result<Box<dyn Device>>;
@@ -165,7 +166,7 @@ pub trait Descriptor {
 
 pub trait Device {
     fn query(&mut self, params: &[String]) -> Result<Vec<(String, String)>>;
-    fn update(&mut self, param: &str, value: &str) -> Result<()>;
+    fn update(&mut self, param: &str, value_ids: &[String]) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +176,9 @@ pub enum Bounds {
 
     /// Raw value offset and display value bounds (Low to High, inclusive)
     Range(u8, (MidiValue, MidiValue)),
+
+    /// Sequence of notes
+    NoteSeq
 }
 
 #[derive(Debug, Snafu)]
@@ -184,6 +188,9 @@ pub enum DeviceError {
     },
     UnknownParameter {
         param_name: String,
+    },
+    UnknownValue {
+        value_id: String,
     },
     NoConnectedDevice {
         device_name: String,
@@ -211,40 +218,55 @@ pub enum DeviceError {
     },
 }
 
-pub fn bound_str(bounds: Bounds, vcode: u8) -> Option<String> {
-    match bounds {
-        Bounds::Discrete(values) => {
-            for v in &values {
-                if v.0 == vcode {
-                    return Some(v.1.to_string());
+pub fn bound_str(bounds: Bounds, vcode: &[u8]) -> Option<String> {
+    if let Some(first) = vcode.get(0) {
+        match bounds {
+            Bounds::Discrete(values) => {
+                for v in &values {
+                    if v.0 == *first {
+                        return Some(v.1.to_string());
+                    }
                 }
             }
-        }
-        Bounds::Range(offset, (lo, hi)) => {
-            if vcode >= lo && vcode <= hi {
-                return Some((vcode + offset).to_string());
+            Bounds::Range(offset, (lo, hi)) => {
+                if *first >= lo && *first <= hi {
+                    return Some((*first + offset).to_string());
+                }
+            }
+            Bounds::NoteSeq => {
+                return Some(vcode.iter().map(|note| Note{note: *note}.to_string()).collect::<Vec<String>>().join(","));
             }
         }
     }
     None
 }
 
-pub fn bound_code(bounds: Bounds, bound_id: &str) -> Option<u8> {
-    match bounds {
-        Bounds::Discrete(values) => {
-            for v in &values {
-                if v.1.eq(bound_id) {
-                    return Some(v.0);
+pub fn bound_codes(bounds: Bounds, bound_ids: &[String]) -> Result<Vec<u8>> {
+    let mut bcode = Vec::with_capacity(bound_ids.len());
+    for b_id in bound_ids {
+        match bounds {
+            Bounds::Discrete(values) => {
+                for v in &values {
+                    if v.1.eq(b_id) {
+                        bcode.push(v.0);
+                        continue;
+                    }
                 }
             }
-        }
-        Bounds::Range(offset, (lo, hi)) => {
-            if let Ok(val) = u8::from_str(bound_id) {
-                if val >= lo && val <= hi {
-                    return Some(val - offset);
+            Bounds::Range(offset, (lo, hi)) => {
+                if let Ok(val) = u8::from_str(b_id) {
+                    if val >= lo && val <= hi {
+                        bcode.push(val - offset);
+                        continue;
+                    }
                 }
             }
+            Bounds::NoteSeq => {
+                bcode.push(Note::from_str(b_id)?.note);
+                continue;
+            }
         }
+        return Err(Box::new(DeviceError::ValueOutOfBound { value_name: b_id.to_owned() }));
     }
-    None
+    Ok(bcode)
 }
