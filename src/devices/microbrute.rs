@@ -9,6 +9,7 @@ use devices::Result;
 use midir::{MidiOutput, MidiOutputConnection};
 use std::str::FromStr;
 use strum::{IntoEnumIterator};
+use linked_hash_map::LinkedHashMap;
 
 //            usb_vendor_id: 0x1c75,
 //            usb_product_id: 0x0206,
@@ -58,7 +59,7 @@ static MICROBRUTE: &[u8] = &[0x00, 0x20, 0x6b, 0x05];
 
 static REALTIME: u8 = 0x7e;
 
-static IDENTITY_REPLY: &[u8] = &[REALTIME, 0x01, 0x06, 0x02];
+static IDENTITY_REPLY: &[u8] = &[REALTIME, 0x01, 0x06, 0x02, 0x04];
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
 enum MicrobruteGlobals {
@@ -220,30 +221,27 @@ pub struct MicroBruteDevice {
 impl MicroBruteDevice {
     // TODO return device version / id string
     fn identify(&mut self) -> Result<()> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name, IDENTITY_REPLY)?;
+        static ID_KEY: &str = "ID";
+        let sysex_replies = devices::sysex_query_init(&self.port_name, IDENTITY_REPLY,
+              |msg, result| if !msg.starts_with(&[0x00, 0x02, 0x01]) {
+//                  result.insert(ID_KEY, "###".to_owned())
+              } else {
+                  let _ = result.insert(ID_KEY.to_string(), vec!["OK".to_owned()]);
+              })?;
         self.midi_connection
             .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
         let id = sysex_replies.close_wait(500)
-            .get(0)
-            .cloned()
+            .iter().next()
             .ok_or(DeviceError::NoReply)?;
 
-        if !id.as_slice().starts_with(&[
-            0xf0, 0x7e, 0x01, 0x06, 0x02, 0x00, /* arturia */ 0x20, 0x6b,
-            0x04, 0x00, 0x02, 0x01, /* major version */ 0x01, 0x00,
-            // remaining 0x00, /* minor version */ 0x03, 0x02, 0xf7]) {
-        ]) {
-            Err(Box::new(DeviceError::WrongId { id: id.to_vec() }))
-        } else {
-            self.msg_id += 1;
-            Ok(())
-        }
+        self.msg_id += 1;
+        Ok(())
     }
 }
 
 impl Device for MicroBruteDevice {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(String, Vec<String>)>> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE)?;
+    fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>> {
+    let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE, decode)?;
         for param_str in params {
             let param = MicrobruteGlobals::parse(param_str)?;
             let query_code  =param.sysex_query_code();
@@ -263,9 +261,7 @@ impl Device for MicroBruteDevice {
                 }
             }
         }
-        Ok(sysex_replies.close_wait(500).iter()
-            .filter_map(|msg| decode(msg))
-            .collect())
+        Ok(sysex_replies.close_wait(500))
     }
 
     fn update(&mut self, param_str: &str, value_ids: &[String]) -> Result<()> {
@@ -279,21 +275,32 @@ impl Device for MicroBruteDevice {
     }
 }
 
-fn decode(msg: &[u8]) -> Option<(String, Vec<String>)> {
+fn decode(msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
     let param = into_param(msg);
     match param {
-        Some(Seq(idx)) => { None },
-        Some(param) => devices::bound_str(bounds(param), &[msg[9]])
-            .map(|bound| (param.as_ref().to_string(), vec![bound])),
-        _ => None
-    }
+        Some(Seq(idx)) => {
+//0x01 MSGID(u8) SEQ(0x23) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
+//repseq1a   01 5b 23 3a 00 00 20 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//repseq1b   01 5c 23 3a 00 20 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+//repseq2a   01 32 23 3a 01 00 20 3c 3c 3c 30 3c 3c 3c 48 3c 3c 3c 30 3c 3c 48 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//repseq2a   01 33 23 3a 01 20 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+        },
+        Some(param) => {
+            if let Some(bound) = devices::bound_str(bounds(param), &[msg[3]]) {
+                let _ = result_map.insert(param.as_ref().to_string(), vec![bound]);
+            }
+        }
+        _ => {}
+    };
 }
 
 fn into_param(msg: &[u8]) -> Option<MicrobruteGlobals> {
     for p in MicrobruteGlobals::iter() {
-        if p.sysex_data_code() == msg[8] {
+        if p.sysex_data_code() == msg[2] {
             match p {
-                Seq(_) => return Some(Seq(msg[9])),
+                Seq(_) => return Some(Seq(msg[3])),
                 _ => return Some(p)
             }
         }

@@ -127,7 +127,7 @@ fn main() -> devices::Result<()> {
                 param_names = dev.globals().iter().map(|p| p.to_string()).collect();
             }
             for pair in sysex.query(param_names.as_slice())? {
-                println!("{} {}", pair.0, pair.1)
+                println!("{} {}", pair.0, pair.1.join(" "))
             }
         }
     }

@@ -18,6 +18,8 @@ use std::fmt;
 use strum::IntoEnumIterator;
 use std::error::Error;
 
+use linked_hash_map::LinkedHashMap;
+
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -109,21 +111,23 @@ fn input_port(midi: &MidiInput, name4: &str) -> Option<MidiPort> {
     None
 }
 
-pub fn sysex_query_init(port_name: &str, match_header: &'static [u8]) -> Result<SysexQuery> {
+pub fn sysex_query_init<D>(port_name: &str, match_header: &'static [u8], decode: D) -> Result<SysexQuery>
+    where D:Fn(&[u8], &mut LinkedHashMap<String, Vec<String>>) + Send + 'static
+{
     let midi_in = MidiInput::new(CLIENT_NAME)?;
     if let Some(in_port) = input_port(&midi_in, port_name) {
         Ok(SysexQuery(midi_in.connect(
             in_port.number,
             "Query Results",
-            move |_ts, message, results| {
+            move |_ts, message, mut result_map| {
                 if message[0] == 0xf0
                     && message[message.len() - 1] == 0xf7
                     && message[1.. ].starts_with(match_header)
                 {
-                    results.push(message.to_vec());
+                    decode(&message[match_header.len()..message.len()-2], result_map);
                 }
             },
-            Vec::new(),
+            LinkedHashMap::new(),
         )?))
     } else {
         Err(Box::new(DeviceError::NoInputPort {
@@ -132,10 +136,10 @@ pub fn sysex_query_init(port_name: &str, match_header: &'static [u8]) -> Result<
     }
 }
 
-pub struct SysexQuery(MidiInputConnection<Vec<Vec<u8>>>);
+pub struct SysexQuery(MidiInputConnection<LinkedHashMap<String, Vec<String>>>);
 
 impl SysexQuery {
-    pub fn close_wait(self, wait_millis: u64) -> Vec<Vec<u8>> {
+    pub fn close_wait(self, wait_millis: u64) -> LinkedHashMap<String, Vec<String>> {
         sleep(Duration::from_millis(wait_millis));
         self.0.close().1
     }
@@ -164,7 +168,7 @@ pub trait Descriptor {
 }
 
 pub trait Device {
-    fn query(&mut self, params: &[String]) -> Result<Vec<(String, Vec<String>)>>;
+    fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>>;
     fn update(&mut self, param: &str, value_ids: &[String]) -> Result<()>;
 }
 
