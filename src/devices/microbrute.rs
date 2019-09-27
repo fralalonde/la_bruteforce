@@ -294,7 +294,7 @@ impl Device for MicroBruteDevice {
         let reqs = bound_reqs(param);
         let mut bcodes = devices::bound_codes(bounds, value_ids, reqs)?;
         match param {
-            Seq(idx) => {
+            Seq(seq_idx) => {
                 //0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
                 let mut seqlen = bcodes.len() as u8;
                 for _padding in 0..(64 - bcodes.len()) {
@@ -306,13 +306,13 @@ impl Device for MicroBruteDevice {
                     self.midi_connection.send(&sysex(MICROBRUTE, &[
 // UPDATE SEQ
 //0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
-//01 37 23 3a 00 00 01 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//01 37          23 3a           00         00             01                    30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 //01 38 23 3a 01 00 02 30 31 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 //01 39 23 3a 02 00 04 30 31 7f 32 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 //01 3a 23 3a 03 00 20 3c 30 7f 48 3c 7f 48 7f 3c 30 7f 48 3c 7f 48 7f 3c 30 7f 48 3c 7f 48 7f 3f 33 7f 3f 33 7f 41 7f
                         &[ 0x01, self.msg_id as u8 ],
                         &param.sysex_data_code(),
-                        &[ idx, offset as u8, BLOCK_SIZE, if seqlen > BLOCK_SIZE {BLOCK_SIZE} else {seqlen}],
+                        &[ seq_idx, offset as u8, if seqlen > BLOCK_SIZE {BLOCK_SIZE} else {seqlen}],
                         &bcodes[offset..offset + BLOCK_SIZE as usize],
                     ]))?;
                     if seqlen > BLOCK_SIZE {
@@ -347,8 +347,10 @@ fn decode(msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
                     }
                     if *nval == REST_NOTE {
                         notes.push("_".to_string());
-                    } else {
-                        notes.push(MidiNote { note: *nval }.to_string());
+                    } else  if *nval < 24 {
+                        notes.push(format!("?{}", *nval));
+                    }  else {
+                        notes.push(MidiNote { note: *nval - 24}.to_string());
                     }
                 }
             },

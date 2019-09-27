@@ -31,7 +31,7 @@ pub struct MidiNote {
 
 impl Display for MidiNote {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let oct = self.note / 12;
+        let oct = (self.note - 12) / 12;
         let n = self.note % 12;
         let mut prev_note = NoteName::C;
         for i in NoteName::iter() {
@@ -198,7 +198,7 @@ pub enum DeviceError {
     },
     EmptyParameter,
     UnknownValue {
-        value_id: String,
+        value_name: String,
     },
     NoConnectedDevice {
         device_name: String,
@@ -256,40 +256,39 @@ pub fn bound_str(bounds: Bounds, vcode: &[u8]) -> Option<String> {
 }
 
 pub fn bound_codes(bounds: Bounds, bound_ids: &[String], reqs: (usize, usize)) -> Result<Vec<u8>> {
-    let mut bcode = Vec::with_capacity(bound_ids.len());
-    'next:
-    for b_id in bound_ids {
-        match bounds {
-            Bounds::Discrete(values) => {
-                for v in &values {
-                    if v.1.eq(b_id) {
-                        bcode.push(v.0);
-                        break 'next;
-                    }
-                }
-            }
-            Bounds::Range(offset, (lo, hi)) => {
-                if let Ok(val) = u8::from_str(b_id) {
-                    if val >= lo && val <= hi {
-                        bcode.push(val - offset);
-                        break 'next;
-                    }
-                }
-            }
-            Bounds::NoteSeq(offset) => {
-                bcode.push(MidiNote::from_str(b_id)?.note + offset);
-                break 'next;
-            }
-        }
-        return Err(Box::new(DeviceError::ValueOutOfBound { value_name: b_id.to_owned() }));
-    }
-    if bcode.len() < reqs.0 {
+    if bound_ids.len() < reqs.0 {
         return Err(Box::new(DeviceError::MissingValue { param_name: "param".to_string()}));
     }
-    if bcode.len() > reqs.1 {
+    if bound_ids.len() > reqs.1 {
         return Err(Box::new(DeviceError::TooManyValues { param_name: "param".to_string()}));
     }
-    Ok(bcode)
+    match bounds {
+        Bounds::Discrete(values) => {
+            let b_id =bound_ids.get(0).unwrap();
+            for v in &values {
+                if v.1.eq(b_id) {
+                    return Ok(vec![v.0]);
+                }
+            }
+            Err(Box::new(DeviceError::UnknownValue {value_name: b_id.to_owned() }))
+        }
+        Bounds::Range(offset, (lo, hi)) => {
+            let b_id =bound_ids.get(0).unwrap();
+            let val = u8::from_str(b_id)?;
+            if val >= lo && val <= hi {
+                Ok(vec![val - offset])
+            } else {
+                Err(Box::new(DeviceError::ValueOutOfBound { value_name: b_id.to_owned() }))
+            }
+        }
+        Bounds::NoteSeq(offset) => {
+            let mut bcode = Vec::with_capacity(bound_ids.len());
+            for b_id in bound_ids {
+                bcode.push(MidiNote::from_str(b_id)?.note + offset);
+            }
+            Ok(bcode)
+        }
+    }
 }
 
 fn sysex(vendor: &[u8],  parts: &[&[u8]]) -> Vec<u8> {
