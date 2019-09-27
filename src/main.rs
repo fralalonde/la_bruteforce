@@ -92,7 +92,7 @@ fn main() -> devices::Result<()> {
                     }
                 }
                 Bounds::Range(_offset, (lo, hi)) => println!("[{}..{}]", lo, hi),
-                Bounds::NoteSeq => println!("note,note,note..."),
+                Bounds::NoteSeq(_) => println!("note1 note2 note3 ..."),
             }
         }
         Cmd::Set {

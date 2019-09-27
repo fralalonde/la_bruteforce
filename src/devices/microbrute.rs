@@ -1,6 +1,6 @@
 use self::MicrobruteGlobals::*;
 use crate::devices::Bounds::*;
-use crate::devices::DeviceError;
+use crate::devices::{DeviceError, MidiNote, sysex};
 use crate::devices::{Bounds, Descriptor, Device};
 use crate::devices::CLIENT_NAME;
 use crate::devices::{self, MidiPort};
@@ -10,13 +10,16 @@ use midir::{MidiOutput, MidiOutputConnection};
 use std::str::FromStr;
 use strum::{IntoEnumIterator};
 use linked_hash_map::LinkedHashMap;
+use hex;
+use std::fmt::{Display, Formatter};
+use std::fmt;
 
 //            usb_vendor_id: 0x1c75,
 //            usb_product_id: 0x0206,
 
 //const MICROBRUTE_SYSEX_REQUEST: u8 = 0x06;
 
-//static ARTURIA: &[u8] = &[0x00, 0x20, 0x6b];
+static ARTURIA: &[u8] = &[0x00, 0x20, 0x6b];
 
 // UPDATE SEQ
 //0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
@@ -59,7 +62,9 @@ static MICROBRUTE: &[u8] = &[0x00, 0x20, 0x6b, 0x05];
 
 static REALTIME: u8 = 0x7e;
 
-static IDENTITY_REPLY: &[u8] = &[REALTIME, 0x01, 0x06, 0x02, 0x04];
+static IDENTITY_REPLY: &[u8] = &[REALTIME, 0x01, 0x06, 0x02];
+
+const REST_NOTE: u8 = 0x7f;
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
 enum MicrobruteGlobals {
@@ -80,29 +85,40 @@ enum MicrobruteGlobals {
     Seq(u8) ,
 }
 
+impl Display for MicrobruteGlobals {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())?;
+        if let Seq(idx) = self {
+            f.write_fmt(format_args!("/{}", idx + 1))?;
+        }
+        Ok(())
+    }
+}
+
 impl MicrobruteGlobals {
-    fn sysex_data_code(&self) -> u8 {
+    fn sysex_data_code(&self) -> [u8; 2] {
         match self {
-            KeyNotePriority => 0x0b,
-            KeyVelocityResponse => 0x11,
-            MidiSendChan => 0x07,
-            MidiRecvChan => 0x05,
-            LfoKeyRetrig => 0x0f,
-            EnvLegatoMode => 0x0d,
-            BendRange => 0x2c,
-            Gate => 0x36,
-            Sync => 0x3c,
-            SeqPlay => 0x2e,
-            SeqKeyRetrig => 0x34,
-            SeqNextSeq => 0x32,
-            SeqStepOn => 0x2a,
-            SeqStep => 0x38,
-            Seq(_) => 0x3a,
+            KeyNotePriority => [0x01, 0x0b],
+            KeyVelocityResponse => [0x01, 0x11],
+            MidiSendChan => [0x01, 0x07],
+            MidiRecvChan => [0x01, 0x05],
+            LfoKeyRetrig => [0x01, 0x0f],
+            EnvLegatoMode => [0x01, 0x0d],
+            BendRange => [0x01, 0x2c],
+            Gate => [0x01, 0x36],
+            Sync => [0x01, 0x3c],
+            SeqPlay => [0x01, 0x2e],
+            SeqKeyRetrig => [0x01, 0x34],
+            SeqNextSeq => [0x01, 0x32],
+            SeqStepOn => [0x01, 0x2a],
+            SeqStep => [0x01, 0x38],
+            Seq(_) => [0x23, 0x3a],
         }
     }
 
-    fn sysex_query_code(&self) -> u8 {
-        self.sysex_data_code() + 1
+    fn sysex_query_code(&self) -> [u8; 2] {
+        let z = self.sysex_data_code();
+        [z[0], z[1] + 1]
     }
 
     /// low index is always 1
@@ -208,7 +224,14 @@ fn bounds(param: MicrobruteGlobals) -> Bounds {
             (0x20, "1/32"),
         ]),
         SeqStepOn => Discrete(vec![(0, "Clock"), (1, "Gate")]),
-        Seq(_) => NoteSeq
+        Seq(_) => NoteSeq(24)
+    }
+}
+
+fn bound_reqs(bounds: MicrobruteGlobals) -> (usize, usize) {
+    match bounds {
+        Seq(_) => (0, 64),
+        _ => (1,1)
     }
 }
 
@@ -223,16 +246,17 @@ impl MicroBruteDevice {
     fn identify(&mut self) -> Result<()> {
         static ID_KEY: &str = "ID";
         let sysex_replies = devices::sysex_query_init(&self.port_name, IDENTITY_REPLY,
-              |msg, result| if !msg.starts_with(&[0x00, 0x02, 0x01]) {
-//                  result.insert(ID_KEY, "###".to_owned())
+              |msg, result| if msg.starts_with(ARTURIA) {
+                  // TODO could grab firmware version
+                  let _ = result.insert(ID_KEY.to_string(), vec![]);
               } else {
-                  let _ = result.insert(ID_KEY.to_string(), vec!["OK".to_owned()]);
+                  eprintln!("received spurious sysex {}", hex::encode(msg));
               })?;
         self.midi_connection
             .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
-        let id = sysex_replies.close_wait(500)
+        sysex_replies.close_wait(500)
             .iter().next()
-            .ok_or(DeviceError::NoReply)?;
+            .ok_or(DeviceError::NoIdentificationReply)?;
 
         self.msg_id += 1;
         Ok(())
@@ -244,19 +268,19 @@ impl Device for MicroBruteDevice {
     let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE, decode)?;
         for param_str in params {
             let param = MicrobruteGlobals::parse(param_str)?;
-            let query_code  =param.sysex_query_code();
+            let query_code  = &param.sysex_query_code();
             match param.index() {
                 Some(idx) => {
                     self.midi_connection
-                        .send(&sysex(MICROBRUTE, &[0x01, self.msg_id as u8, 0x03, query_code, idx, 0x00, 0x20]))?;
+                        .send(&sysex(MICROBRUTE, &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x00, 0x20]]))?;
                     self.msg_id += 1;
                     self.midi_connection
-                        .send(&sysex(MICROBRUTE, &[0x01, self.msg_id as u8, 0x03, query_code, idx, 0x20, 0x20]))?;
+                        .send(&sysex(MICROBRUTE, &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x20, 0x20]]))?;
                     self.msg_id += 1;
                 },
                 None => {
                     self.midi_connection
-                    .send(&sysex(MICROBRUTE, &[0x01, self.msg_id as u8, 0x00, query_code]))?;
+                    .send(&sysex(MICROBRUTE, &[&[0x01, self.msg_id as u8], query_code]))?;
                     self.msg_id += 1;
                 }
             }
@@ -267,40 +291,83 @@ impl Device for MicroBruteDevice {
     fn update(&mut self, param_str: &str, value_ids: &[String]) -> Result<()> {
         let param = MicrobruteGlobals::parse(param_str)?;
         let bounds = bounds(param);
-        let mut body = vec![ 0x01, self.msg_id as u8, 0x01, param.sysex_data_code() ];
-        body.append(&mut devices::bound_codes(bounds, value_ids)?);
-        self.midi_connection.send(&sysex(MICROBRUTE, &body))?;
-        self.msg_id += 1;
+        let reqs = bound_reqs(param);
+        let mut bcodes = devices::bound_codes(bounds, value_ids, reqs)?;
+        match param {
+            Seq(idx) => {
+                //0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
+                let mut seqlen = bcodes.len() as u8;
+                for _padding in 0..(64 - bcodes.len()) {
+                    bcodes.push(0x00)
+                }
+                static BLOCK_SIZE: u8 = 0x20;
+                for block in 0..1 {
+                    let offset: usize = BLOCK_SIZE as usize * block;
+                    self.midi_connection.send(&sysex(MICROBRUTE, &[
+// UPDATE SEQ
+//0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
+//01 37 23 3a 00 00 01 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//01 38 23 3a 01 00 02 30 31 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//01 39 23 3a 02 00 04 30 31 7f 32 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+//01 3a 23 3a 03 00 20 3c 30 7f 48 3c 7f 48 7f 3c 30 7f 48 3c 7f 48 7f 3c 30 7f 48 3c 7f 48 7f 3f 33 7f 3f 33 7f 41 7f
+                        &[ 0x01, self.msg_id as u8 ],
+                        &param.sysex_data_code(),
+                        &[ idx, offset as u8, BLOCK_SIZE, if seqlen > BLOCK_SIZE {BLOCK_SIZE} else {seqlen}],
+                        &bcodes[offset..offset + BLOCK_SIZE as usize],
+                    ]))?;
+                    if seqlen > BLOCK_SIZE {
+                        seqlen -= BLOCK_SIZE;
+                    }
+                    self.msg_id += 1;
+                }
+            }
+            _ => {
+                self.midi_connection.send(&sysex(MICROBRUTE, &[
+                    &[ 0x01, self.msg_id as u8 ],
+                    &param.sysex_data_code(),
+                    &[*bcodes.get(0)
+                        .ok_or(DeviceError::MissingValue{param_name: param_str.to_string()})?]
+                ]))?;
+                self.msg_id += 1;
+            }
+        }
         Ok(())
     }
 }
 
 fn decode(msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
-    let param = into_param(msg);
-    match param {
-        Some(Seq(idx)) => {
-//0x01 MSGID(u8) SEQ(0x23) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
-//repseq1a   01 5b 23 3a 00 00 20 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 3c 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-//repseq1b   01 5c 23 3a 00 20 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-
-//repseq2a   01 32 23 3a 01 00 20 3c 3c 3c 30 3c 3c 3c 48 3c 3c 3c 30 3c 3c 48 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-//repseq2a   01 33 23 3a 01 20 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-
-        },
-        Some(param) => {
-            if let Some(bound) = devices::bound_str(bounds(param), &[msg[3]]) {
-                let _ = result_map.insert(param.as_ref().to_string(), vec![bound]);
+    dbg!(hex::encode(msg));
+    if let Some(param)  = into_param(msg) {
+        match param {
+            Seq(_idx) => {
+                let notes = result_map.entry(param.to_string()).or_insert(vec![]);
+                for nval in &msg[7..] {
+                    if *nval == 0 {
+                        break;
+                    }
+                    if *nval == REST_NOTE {
+                        notes.push("_".to_string());
+                    } else {
+                        notes.push(MidiNote { note: *nval }.to_string());
+                    }
+                }
+            },
+            param => {
+                if let Some(bound) = devices::bound_str(bounds(param), &[msg[4]]) {
+                    let _ = result_map.insert(param.to_string(), vec![bound]);
+                } else {
+                    eprintln!("param {} unbound value code '{}'", param.to_string(), msg[4]);
+                }
             }
         }
-        _ => {}
     };
 }
 
 fn into_param(msg: &[u8]) -> Option<MicrobruteGlobals> {
     for p in MicrobruteGlobals::iter() {
-        if p.sysex_data_code() == msg[2] {
+        if p.sysex_data_code()[1] == msg[3] {
             match p {
-                Seq(_) => return Some(Seq(msg[3])),
+                Seq(_) => return Some(Seq(msg[4])),
                 _ => return Some(p)
             }
         }
@@ -308,11 +375,4 @@ fn into_param(msg: &[u8]) -> Option<MicrobruteGlobals> {
     None
 }
 
-fn sysex(vendor: &[u8],  payload: &[u8]) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(2 + vendor.len() + payload.len());
-    msg.push(0xf0);
-    msg.extend_from_slice(vendor);
-    msg.extend_from_slice(payload);
-    msg.push(0xf7);
-    msg
-}
+
