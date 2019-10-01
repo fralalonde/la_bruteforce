@@ -1,0 +1,37 @@
+name: MicroBrute
+vendor: Arturia
+port_prefix: MicroBrute
+sysex:
+  - 0x05
+parameters:
+  Seq:
+    index:
+      lo: 1
+      hi: 8
+      sysex_offset: 1
+    sysex:
+      - 0x04
+      - 0x3a
+    bounds:
+      - type: NoteSeq
+        max_len: 64
+        sysex_offset: 24
+  StepOn:
+    sysex:
+      - 0x01
+      - 0x3a
+    bounds:
+      - type: Values
+        Gate: 0x01
+        Key: 0x02
+  MidiRxChan:
+    sysex:
+      - 0x01
+      - 0x3a
+    bounds:
+      - type: Range
+        lo: 1
+        hi: 16
+        sysex_offset: 1
+      - type: Values
+        All: 0x10

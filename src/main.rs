@@ -2,10 +2,8 @@ extern crate strum;
 #[macro_use]
 extern crate strum_macros;
 
-//#[macro_use]
-//extern crate lazy_static;
-
 mod devices;
+mod schema;
 
 use midir::MidiOutput;
 use structopt::StructOpt;

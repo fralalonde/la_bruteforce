@@ -10,20 +10,24 @@ use snafu::Snafu;
 
 use std::time::Duration;
 
+use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::thread::sleep;
-use std::fmt::{Display, Formatter};
-use std::fmt;
 
-use strum::IntoEnumIterator;
 use std::error::Error;
-
+use strum::IntoEnumIterator;
 use linked_hash_map::LinkedHashMap;
-
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
+
+pub type MidiValue = u8;
+
+static ARTURIA: &[u8] = &[0x00, 0x20, 0x6b];
+static REALTIME: u8 = 0x7e;
+static IDENTITY_REPLY: &[u8] = &[REALTIME, 0x01, 0x06, 0x02];
 
 pub struct MidiNote {
     note: u8,
@@ -79,12 +83,16 @@ impl FromStr for MidiNote {
             }
             let octave = match item {
                 Some(oct) => u8::from_str(&oct.to_string())?,
-                None => 0
+                None => 0,
             };
             // C0 starts at 12
-            return Ok(MidiNote { note: octave * 12 + note + 12});
+            return Ok(MidiNote {
+                note: octave * 12 + note + 12,
+            });
         }
-        Err(Box::new(DeviceError::NoteParse {note: s.to_string()}))
+        Err(Box::new(DeviceError::NoteParse {
+            note: s.to_string(),
+        }))
     }
 }
 
@@ -114,8 +122,13 @@ fn input_port(midi: &MidiInput, name4: &str) -> Option<MidiPort> {
     None
 }
 
-pub fn sysex_query_init<D>(port_name: &str, match_header: &'static [u8], decode: D) -> Result<SysexQuery>
-    where D:Fn(&[u8], &mut LinkedHashMap<String, Vec<String>>) + Send + 'static
+pub fn sysex_query_init<D>(
+    port_name: &str,
+    match_header: &'static [u8],
+    decode: D,
+) -> Result<SysexQuery>
+where
+    D: Fn(&[u8], &mut LinkedHashMap<String, Vec<String>>) + Send + 'static,
 {
     let midi_in = MidiInput::new(CLIENT_NAME)?;
     if let Some(in_port) = input_port(&midi_in, port_name) {
@@ -125,9 +138,9 @@ pub fn sysex_query_init<D>(port_name: &str, match_header: &'static [u8], decode:
             move |_ts, message, result_map| {
                 if message[0] == 0xf0
                     && message[message.len() - 1] == 0xf7
-                    && message[1.. ].starts_with(match_header)
+                    && message[1..].starts_with(match_header)
                 {
-                    let subslice = &message[match_header.len()+1..message.len()-1];
+                    let subslice = &message[match_header.len() + 1..message.len() - 1];
                     decode(subslice, result_map);
                 }
             },
@@ -149,18 +162,18 @@ impl SysexQuery {
     }
 }
 
-pub type MidiValue = u8;
-
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, Display)]
 pub enum DeviceType {
     MicroBrute,
+    //    BeatStep,
 }
 
 impl DeviceType {
     pub fn descriptor(&self) -> Box<dyn Descriptor> {
-        Box::new(match self {
-            DeviceType::MicroBrute => microbrute::MicroBruteDescriptor {},
-        })
+        match self {
+            DeviceType::MicroBrute => Box::new(microbrute::MicroBruteDescriptor {}),
+            //            DeviceType::BeatStep => Box::new(beatstep::BeatStepDescriptor {}),
+        }
     }
 }
 
@@ -169,6 +182,11 @@ pub trait Descriptor {
     fn bounds(&self, param: &str) -> Result<Bounds>;
     fn ports(&self) -> Vec<MidiPort>;
     fn connect(&self, midi_client: MidiOutput, port: &MidiPort) -> Result<Box<dyn Device>>;
+}
+
+pub trait Parameter {
+    //    fn from_sysex(message: &[u8]) -> &Parameter;
+    //    fn from_str(name: &str) -> &Parameter;
 }
 
 pub trait Device {
@@ -185,7 +203,7 @@ pub enum Bounds {
     Range(u8, (MidiValue, MidiValue)),
 
     /// Sequence of notes with offset from std MIDI note value
-    NoteSeq(u8)
+    NoteSeq(u8),
 }
 
 #[derive(Debug, Snafu)]
@@ -222,14 +240,15 @@ pub enum DeviceError {
         id: Vec<u8>,
     },
     NoteParse {
-        note: String
+        note: String,
     },
     MissingValue {
-        param_name: String
+        param_name: String,
     },
     TooManyValues {
-        param_name: String
+        param_name: String,
     },
+    ReadSizeError,
 }
 
 pub fn bound_str(bounds: Bounds, vcode: &[u8]) -> Option<String> {
@@ -248,7 +267,18 @@ pub fn bound_str(bounds: Bounds, vcode: &[u8]) -> Option<String> {
                 }
             }
             Bounds::NoteSeq(offset) => {
-                return Some(vcode.iter().map(|note| MidiNote {note: (*note - offset)}.to_string()).collect::<Vec<String>>().join(","));
+                return Some(
+                    vcode
+                        .iter()
+                        .map(|note| {
+                            MidiNote {
+                                note: (*note - offset),
+                            }
+                            .to_string()
+                        })
+                        .collect::<Vec<String>>()
+                        .join(","),
+                );
             }
         }
     }
@@ -257,28 +287,36 @@ pub fn bound_str(bounds: Bounds, vcode: &[u8]) -> Option<String> {
 
 pub fn bound_codes(bounds: Bounds, bound_ids: &[String], reqs: (usize, usize)) -> Result<Vec<u8>> {
     if bound_ids.len() < reqs.0 {
-        return Err(Box::new(DeviceError::MissingValue { param_name: "param".to_string()}));
+        return Err(Box::new(DeviceError::MissingValue {
+            param_name: "param".to_string(),
+        }));
     }
     if bound_ids.len() > reqs.1 {
-        return Err(Box::new(DeviceError::TooManyValues { param_name: "param".to_string()}));
+        return Err(Box::new(DeviceError::TooManyValues {
+            param_name: "param".to_string(),
+        }));
     }
     match bounds {
         Bounds::Discrete(values) => {
-            let b_id =bound_ids.get(0).unwrap();
+            let b_id = bound_ids.get(0).unwrap();
             for v in &values {
                 if v.1.eq(b_id) {
                     return Ok(vec![v.0]);
                 }
             }
-            Err(Box::new(DeviceError::UnknownValue {value_name: b_id.to_owned() }))
+            Err(Box::new(DeviceError::UnknownValue {
+                value_name: b_id.to_owned(),
+            }))
         }
         Bounds::Range(offset, (lo, hi)) => {
-            let b_id =bound_ids.get(0).unwrap();
+            let b_id = bound_ids.get(0).unwrap();
             let val = u8::from_str(b_id)?;
             if val >= lo && val <= hi {
                 Ok(vec![val - offset])
             } else {
-                Err(Box::new(DeviceError::ValueOutOfBound { value_name: b_id.to_owned() }))
+                Err(Box::new(DeviceError::ValueOutOfBound {
+                    value_name: b_id.to_owned(),
+                }))
             }
         }
         Bounds::NoteSeq(offset) => {
@@ -291,7 +329,7 @@ pub fn bound_codes(bounds: Bounds, bound_ids: &[String], reqs: (usize, usize)) -
     }
 }
 
-fn sysex(vendor: &[u8],  parts: &[&[u8]]) -> Vec<u8> {
+fn sysex(vendor: &[u8], parts: &[&[u8]]) -> Vec<u8> {
     let mut msg = Vec::with_capacity(64);
     msg.push(0xf0);
     msg.extend_from_slice(vendor);

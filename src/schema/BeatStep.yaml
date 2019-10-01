@@ -1,0 +1,44 @@
+name: BeatStep
+vendor: Arturia
+midi-port: Arturia BeatStep
+sysex: 0x7f
+parameter:
+  Knob:
+    index: 1..16
+    modes:
+      Off:
+        sysex: 0x00
+      CC:
+        sysex:
+          - 0x01
+        fields:
+          CCNum:
+            range:
+              lo: 0
+              hi: 127
+          Min:
+            range:
+              lo: 0
+              hi: 127
+          Max:
+            range:
+              lo: 0
+              hi: 127
+          Channel:
+            range:
+              lo: 1
+              hi: 16
+              sysex-offset: 1
+            values:
+              Global:
+                sysex: 0x10
+          Option:
+            values:
+              Absolute:
+                sysex: 0x00
+              Relative1:
+                sysex: 0x01
+              Relative2:
+                sysex: 0x02
+              Relative3:
+                sysex: 0x03

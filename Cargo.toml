@@ -4,13 +4,21 @@ version = "6.6.6"
 authors = ["Francis Lalonde <fralalonde@gmail.com>"]
 edition = "2018"
 
+[profile.release]
+opt-level = 'z'  # Optimize for size.
+codegen-units = 1
+lto = true
+
 [dependencies]
 snafu = "0.5.0"
 midir = "0.5"
 structopt = "0.3"
 strum = "0.15"
 strum_macros = "0.15"
-lazy_static = "1.4"
-linked-hash-map = "0.5"
+
+linked-hash-map  = "0.5"
 hex = "0.4"
-#const-concat = "0.1.0"
+lazy_static = "1"
+serde =  { version = "1.0", features = ["derive"] }
+serde_yaml = "0.8"
+
