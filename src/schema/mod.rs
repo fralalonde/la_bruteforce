@@ -3,9 +3,13 @@ pub type Sysex = Vec<u8>;
 
 use serde::{Deserialize, Serialize};
 
-use crate::devices::{DeviceError, Result};
+use crate::devices::{DeviceError, Result, MidiPort, CLIENT_NAME};
 use std::convert::TryFrom;
 use std::collections::BTreeMap;
+use crate::devices;
+use midir::MidiOutput;
+use regex::Regex;
+use std::str::FromStr;
 
 //lazy_static!{
 //    static ref
@@ -40,32 +44,102 @@ fn parse(body: &str) -> Result<Device> {
     Ok(serde_yaml::from_str(body)?)
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Device {
-    vendor: String,
-    port_prefix: String,
-    sysex: Sysex,
-    parameters: BTreeMap<String, Parameter>,
+    pub vendor: String,
+    pub port_prefix: String,
+    pub sysex: Sysex,
+    pub parameters: BTreeMap<String, Parameter>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+impl Device {
+//    fn parameters(&self) -> Vec<String> {
+//        MicrobruteGlobals::iter()
+//            .flat_map(|p| {
+//                if let Some(max) = p.max_index() {
+//                    (1..=max)
+//                        .map(|idx| format!("{}/{}", p.as_ref(), idx))
+//                        .collect()
+//                } else {
+//                    vec![p.as_ref().to_string()]
+//                }
+//            })
+//            .collect()
+//    }
+//
+//    fn bounds(&self, param: &str) -> Result<Bounds> {
+//        Ok(bounds(MicrobruteGlobals::parse(param)?))
+//    }
+
+    fn read_key(&self, param_str: String) -> Result<ParamKey> {
+        static RE: Regex = Regex::new(r"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))")?;
+
+        if let Some(cap) = RE.captures(&param_str) {
+            let param_match = cap.name("name")?.as_str();
+            let param = self.parameters.get(param_match)?;
+
+            let index_val = if let Some(idx_match) = cap.name("idx") {usize::from_str(idx_match.as_str())?} else {None};
+            let index = match (index_val, param.range) {
+                (Some(value), Some(range)) if value >= range.lo && value <= range.hi => Some(value),
+                (None, None) => None,
+                _ => return Err(Box::new(DeviceError::BadIndexParameter{param_name: param_str.to_string()}))
+            };
+
+            let mode = match (cap.name("mode"), &param.modes) {
+                (Some(mode_str), Some(modes)) => {
+                    if let Some(mode) = modes.get(mode_str.as_str()) {
+                        Some(*mode)
+                    } else {
+                        return Err(Box::new(DeviceError::BadModeParameter{param_name: param_str.to_string()}))
+                    }
+                },
+                (None, None) => None,
+                _ => return Err(Box::new(DeviceError::BadModeParameter{param_name: param_str.to_string()}))
+            };
+
+            ParamKey {
+                param: param.clone(),
+                index,
+                mode,
+            }
+        } else {
+            Err(Box::new(DeviceError::UnknownParam{param_name: param_str.to_string()}))
+        }
+    }
+
+}
+
+pub struct ParamKey {
+    param: Parameter,
+    index: Option<usize>,
+    mode: Option<Mode>,
+}
+
+impl ParamKey {
+    fn read_values(&self, key: &ParamKey, values_str: Vec<String>) -> Result<Vec<u8>> {
+
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Parameter {
-    sysex: Sysex,
-    index: Option<Range>,
-    bounds: Option<Vec<Bounds>>,
-    modes: Option<BTreeMap<String, Mode>>,
+    pub sysex: Sysex,
+    pub range: Option<Range>,
+    pub bounds: Option<Vec<Bounds>>,
+    pub modes: Option<BTreeMap<String, Mode>>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Mode {
-    sysex: Sysex,
-    fields: Fields,
+    pub sysex: Sysex,
+    pub fields: Fields,
 }
 
 pub type Fields = BTreeMap<String, Vec<Bounds>>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-#[serde(tag = "type")]
+//#[serde(tag = "type")]
+#[serde(untagged)]
 pub enum Bounds {
     /// Name / Value pair
     Values(BTreeMap<String, u8>),
@@ -79,15 +153,15 @@ pub enum Bounds {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
 pub struct Range {
-    lo: u8,
-    hi: u8,
-    sysex_offset: u8,
+    pub lo: usize,
+    pub hi: usize,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
 pub struct NoteSeq {
-    max_len: u8,
-    sysex_offset: u8,
+    pub max_len: u8,
+    pub offset: Option<usize>,
 }
 
 #[cfg(test)]
@@ -105,36 +179,41 @@ sysex:
 - 0x05
 parameters:
   Seq:
-    index:
+    range:
       lo: 1
       hi: 8
-      sysex_offset: 1
+      offset: 1
     sysex:
     - 0x04
     - 0x3a
     bounds:
-    - type: NoteSeq
-      max_len: 64
-      sysex_offset: 24
+    - max_len: 64
+      offset: 24
   StepOn:
     sysex:
     - 0x01
     - 0x3a
     bounds:
-    - type: Values
-      Gate: 0x01
+    - Gate: 0x01
       Key: 0x02
   MidiRxChan:
     sysex:
     - 0x01
     - 0x3a
     bounds:
-    - type: Range
-      lo: 1
+    - lo: 1
       hi: 16
-      sysex_offset: 1
-    - type: Values
-      All: 0x10
+      offset: 1
+    - All: 0x10
+  SeqStep:
+    sysex:
+      - 0x01
+      - 0x38
+    bounds:
+      - 1/4: 0x04
+        1/8: 0x08
+        1/16: 0x10
+        1/32: 0x20
 ",
         )
         .unwrap();

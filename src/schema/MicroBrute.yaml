@@ -5,33 +5,118 @@ sysex:
   - 0x05
 parameters:
   Seq:
-    index:
+    range:
       lo: 1
       hi: 8
       sysex_offset: 1
     sysex:
-      - 0x04
+      - 0x23
       - 0x3a
     bounds:
       - type: NoteSeq
         max_len: 64
         sysex_offset: 24
-  StepOn:
-    sysex:
-      - 0x01
-      - 0x3a
-    bounds:
-      - type: Values
-        Gate: 0x01
-        Key: 0x02
   MidiRxChan:
     sysex:
       - 0x01
-      - 0x3a
+      - 0x05
+    bounds:
+      - lo: 1
+        hi: 16
+        sysex_offset: 1
+      - All: 0x10
+  MidiTxChan:
+    sysex:
+      - 0x01
+      - 0x07
     bounds:
       - type: Range
         lo: 1
         hi: 16
         sysex_offset: 1
+  KeyNotePriority:
+    sysex:
+     - 0x01
+     - 0x0b
+    bounds:
       - type: Values
-        All: 0x10
+  KeyVelocityResponse:
+    sysex:
+      - 0x01
+      - 0x11
+    bounds:
+      - type: Values
+  LfoKeyRetrig:
+    sysex:
+      - 0x01
+      - 0x0f
+    bounds:
+      - type: Values
+  EnvLegatoMode:
+    sysex:
+      - 0x01, 0x0d,
+    bounds:
+      - type: Values
+  BendRange:
+    sysex:
+      - 0x01
+      - 0x2c
+    bounds:
+      - lo: 1
+        hi: 12
+        sysex_offset: 1
+  Gate:
+    sysex:
+      - 0x01
+      - 0x36
+    bounds:
+      - Short: 0
+        Medium: 1
+        Long: 2
+  Sync:
+    sysex:
+      - 0x01
+      - 0x3c
+    bounds:
+      - Auto: 0
+        Internal: 1
+        External: 2
+  SeqPlay:
+    sysex:
+      - 0x01
+      - 0x2e
+    bounds:
+      - Hold: 0
+        NoteOn: 1
+  SeqKeyRetrig:
+    sysex:
+      - 0x01, 0x34,
+    bounds:
+      - Reset: 0x00
+        Legato: 0x01
+        None: 0x02
+  SeqNextSeq:
+    sysex:
+      - 0x01
+      - 0x32
+    bounds:
+      - End: 0x00
+        Reset: 0x01
+        Continue: 0x02
+  SeqStep:
+    sysex:
+      - 0x01
+      - 0x38
+    bounds:
+      - 1/4: 0x04
+        1/8: 0x08
+        1/16: 0x10
+        1/32: 0x20
+  SeqStepOn:
+    sysex:
+      - 0x01
+      - 0x2a
+    bounds:
+      - type: Values
+        Clock: 0x00
+        Gate: 0x01

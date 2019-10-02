@@ -1,9 +1,9 @@
+use self::MicrobruteGlobals::*;
 use crate::devices::Bounds::*;
 use crate::devices::CLIENT_NAME;
 use crate::devices::{self, MidiPort};
-use crate::devices::{sysex, DeviceError, MidiNote, ARTURIA, IDENTITY_REPLY};
+use crate::devices::{sysex, DeviceError, MidiNote, Parameter, ARTURIA, IDENTITY_REPLY};
 use crate::devices::{Bounds, Descriptor, Device};
-use crate::schema;
 
 use devices::Result;
 use hex;
@@ -13,7 +13,6 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use linked_hash_map::LinkedHashMap;
-use regex::Regex;
 
 // usb_vendor_id: 0x1c75,
 // usb_product_id: 0x0206,
@@ -22,14 +21,58 @@ static MICROBRUTE: &[u8] = &[0x00, 0x20, 0x6b, 0x05];
 
 const REST_NOTE: u8 = 0x7f;
 
-use crate::schema::Parameter;
+#[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
+enum MicrobruteGlobals {
+    KeyNotePriority,
+    KeyVelocityResponse,
+    MidiSendChan,
+    MidiRecvChan,
+    LfoKeyRetrig,
+    EnvLegatoMode,
+    BendRange,
+    Gate,
+    Sync,
+    SeqPlay,
+    SeqKeyRetrig,
+    SeqNextSeq,
+    SeqStepOn,
+    SeqStep,
+    Seq(u8),
+}
 
-struct MicrobruteGlobals {
-    parameter: Parameter,
-    index: Option<usize>,
+impl Parameter for MicrobruteGlobals {}
+
+impl Display for MicrobruteGlobals {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())?;
+        if let Seq(idx) = self {
+            f.write_fmt(format_args!("/{}", idx + 1))?;
+        }
+        Ok(())
+    }
 }
 
 impl MicrobruteGlobals {
+    fn sysex_data_code(&self) -> [u8; 2] {
+        match self {
+            KeyNotePriority => [0x01, 0x0b],
+            KeyVelocityResponse => [0x01, 0x11],
+            MidiSendChan => [0x01, 0x07],
+            MidiRecvChan => [0x01, 0x05],
+            LfoKeyRetrig => [0x01, 0x0f],
+            EnvLegatoMode => [0x01, 0x0d],
+            BendRange => [0x01, 0x2c],
+            Gate => [0x01, 0x36],
+            Sync => [0x01, 0x3c],
+            SeqPlay => [0x01, 0x2e],
+            SeqKeyRetrig => [0x01, 0x34],
+            SeqNextSeq => [0x01, 0x32],
+            SeqStepOn => [0x01, 0x2a],
+            SeqStep => [0x01, 0x38],
+            Seq(_) => [0x23, 0x3a],
+        }
+    }
+
     fn sysex_query_code(&self) -> [u8; 2] {
         let z = self.sysex_data_code();
         [z[0], z[1] + 1]
@@ -37,42 +80,30 @@ impl MicrobruteGlobals {
 
     /// low index is always 1
     fn max_index(&self) -> Option<usize> {
-        self.parameter.range.map(|i| i.hi)
+        match self {
+            Seq(_) => Some(8),
+            _ => None,
+        }
     }
 
-}
-
-pub struct MicroBruteDevice {
-    schema: schema::Device,
-    midi_connection: MidiOutputConnection,
-    port_name: String,
-    msg_id: usize,
-}
-
-impl MicroBruteDevice {z
-    /// from CLI
-    fn parse(&self, param_str: &str) -> Result<Parameter> {
-        let re = Regex::new(r"(?P<name>.+)(:?/(?P<seq>\d+))(?::(?P<mode>.+))")?;
-        if let Some(cap) = re.captures(param_str) {
-            let pname = cap.name("name")?;
-            Parameter {
-                self.schema.parameters.get()?;
-            }
+    fn index(&self) -> Option<u8> {
+        match self {
+            Seq(idx) => Some(*idx),
+            _ => None,
         }
+    }
 
+    fn parse(s: &str) -> Result<Self> {
         let mut parts = s.split("/");
         if let Some(name) = parts.next() {
-            if let Some(idx_or_mode) = parts.next() {
-                let mut idx_mode = idx_or_mode.split(":");
-                if let Some(mode) = parts.next() {
-                    // idx starts from 1, internally starts from 0
-                    let idx = u8::from_str(idx)? - 1;
-                    match name {
-                        "Seq" => Ok(Seq(idx)),
-                        _ => Err(Box::new(DeviceError::UnknownParameter {
-                            param_name: s.to_owned(),
-                        })),
-                    }
+            if let Some(idx) = parts.next() {
+                // idx starts from 1, internally starts from 0
+                let idx = u8::from_str(idx)? - 1;
+                match name {
+                    "Seq" => Ok(Seq(idx)),
+                    _ => Err(Box::new(DeviceError::UnknownParameter {
+                        param_name: s.to_owned(),
+                    })),
                 }
             } else {
                 Ok(MicrobruteGlobals::from_str(s)?)
@@ -81,13 +112,97 @@ impl MicroBruteDevice {z
             return Err(Box::new(DeviceError::EmptyParameter));
         }
     }
+}
 
-    fn bounds(param: MicrobruteGlobals) -> Bounds {
+#[derive(Debug)]
+pub struct MicroBruteDescriptor {}
+
+impl Descriptor for MicroBruteDescriptor {
+    fn globals(&self) -> Vec<String> {
+        MicrobruteGlobals::iter()
+            .flat_map(|p| {
+                if let Some(max) = p.max_index() {
+                    (1..=max)
+                        .map(|idx| format!("{}/{}", p.as_ref(), idx))
+                        .collect()
+                } else {
+                    vec![p.as_ref().to_string()]
+                }
+            })
+            .collect()
     }
 
-    fn bound_reqs(bounds: MicrobruteGlobals) -> (usize, usize) {
+    fn bounds(&self, param: &str) -> Result<Bounds> {
+        Ok(bounds(MicrobruteGlobals::parse(param)?))
     }
 
+    fn ports(&self) -> Vec<MidiPort> {
+        let midi_client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
+        devices::output_ports(&midi_client)
+            .into_iter()
+            .filter_map(|port| {
+                if port.name.starts_with("MicroBrute") {
+                    Some(port)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn connect(&self, midi_client: MidiOutput, port: &MidiPort) -> Result<Box<dyn Device>> {
+        let midi_connection = midi_client.connect(port.number, &port.name)?;
+        let mut brute = Box::new(MicroBruteDevice {
+            midi_connection,
+            port_name: port.name.to_owned(),
+            msg_id: 0,
+        });
+        brute.identify()?;
+        Ok(brute)
+    }
+}
+
+fn bounds(param: MicrobruteGlobals) -> Bounds {
+    match param {
+        KeyNotePriority => Discrete(vec![(0, "LastNote"), (1, "LowNote"), (2, "HighNote")]),
+        KeyVelocityResponse => {
+            Discrete(vec![(0, "Logarithmic"), (1, "Exponential"), (2, "Linear")])
+        }
+        MidiRecvChan => Range(1, (1, 16)),
+        MidiSendChan => Range(1, (1, 16)),
+        LfoKeyRetrig => Discrete(vec![(0, "Off"), (1, "On")]),
+        EnvLegatoMode => Discrete(vec![(0, "Off"), (1, "On")]),
+        BendRange => Range(1, (1, 12)),
+        Gate => Discrete(vec![(1, "Short"), (2, "Medium"), (3, "Long")]),
+        Sync => Discrete(vec![(0, "Auto"), (1, "Internal"), (2, "External")]),
+        SeqPlay => Discrete(vec![(0, "Hold"), (1, "NoteOn")]),
+        SeqKeyRetrig => Discrete(vec![(0, "Reset"), (1, "Legato"), (2, "None")]),
+        SeqNextSeq => Discrete(vec![(0, "End"), (1, "Reset"), (2, "Continue")]),
+        SeqStep => Discrete(vec![
+            (0x04, "1/4"),
+            (0x08, "1/8"),
+            (0x10, "1/16"),
+            (0x20, "1/32"),
+        ]),
+        SeqStepOn => Discrete(vec![(0, "Clock"), (1, "Gate")]),
+        Seq(_) => NoteSeq(24),
+    }
+}
+
+fn bound_reqs(bounds: MicrobruteGlobals) -> (usize, usize) {
+    match bounds {
+        Seq(_) => (0, 64),
+        _ => (1, 1),
+    }
+}
+
+pub struct MicroBruteDevice {
+    midi_connection: MidiOutputConnection,
+    port_name: String,
+    msg_id: usize,
+}
+
+impl MicroBruteDevice {
     // TODO return device version / id string
     fn identify(&mut self) -> Result<()> {
         static ID_KEY: &str = "ID";
@@ -244,39 +359,4 @@ fn into_param(msg: &[u8]) -> Option<MicrobruteGlobals> {
         }
     }
     None
-}
-
-#[cfg(test)]
-mod test {
-    use regex::Regex;
-
-    #[test]
-    fn beurk() {
-        let re = Regex::new(r"(?P<name>.+)(:?/(?P<seq>\d+))(?::(?P<mode>.+))")?;
-
-        let mut text = "Param/4:Mode";
-        let matches =re.captures(text).unwrap();
-        assert!{matches.name("name").eq(&Some("Param"))}
-        assert!{matches.name("seq").eq(&Some("4"))}
-        assert!{matches.name("mode").eq(&Some("Mode"))}
-
-        text = "Param/4";
-        let matches =re.captures(text).unwrap();
-        assert!{matches.name("name").eq(&Some("Param"))}
-        assert!{matches.name("seq").eq(&Some("4"))}
-        assert!{matches.name("mode").eq(&None)}
-
-        let text = "Param:Mode";
-        let matches =re.captures(text).unwrap();
-        assert!{matches.name("name").eq(&Some("Param"))}
-        assert!{matches.name("seq").eq(&None)}
-        assert!{matches.name("mode").eq(&Some("Mode"))}
-
-        let mut text = "Param";
-        let matches =re.captures(text).unwrap();
-        assert!{matches.name("name").eq(&Some("Param"))}
-        assert!{matches.name("seq").eq(&None)}
-        assert!{matches.name("mode").eq(&None)}
-
-    }
 }

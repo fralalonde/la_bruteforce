@@ -1,6 +1,6 @@
 use std::iter::Iterator;
 
-use midir::MidiOutput;
+use midir::{MidiOutput, MidiOutputConnection};
 use midir::{MidiInput, MidiInputConnection};
 
 //mod beatstep;
@@ -18,6 +18,8 @@ use std::thread::sleep;
 use std::error::Error;
 use strum::IntoEnumIterator;
 use linked_hash_map::LinkedHashMap;
+use regex::Regex;
+use crate::{schema, devices};
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -98,8 +100,30 @@ impl FromStr for MidiNote {
 
 #[derive(Debug, Clone)]
 pub struct MidiPort {
-    pub number: usize,
-    pub name: String,
+    number: usize,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DevicePort {
+    schema: schema::Device,
+    port: MidiPort,
+}
+
+
+impl MidiPort {
+    fn connect(&self, schema: schema::Device) -> Result<Device> {
+        let midi_client = MidiOutput::new(CLIENT_NAME)?;
+        let midi_connection = midi_client.connect(port.number, &port.name)?;
+        let mut device = Device {
+            schema,
+            midi_connection,
+            port_name: port.name.to_owned(),
+            msg_id: 0,
+        };
+        device.identify()?;
+        Ok(device)
+    }
 }
 
 pub fn output_ports(midi_client: &MidiOutput) -> Vec<MidiPort> {
@@ -177,21 +201,49 @@ impl DeviceType {
     }
 }
 
-pub trait Descriptor {
-    fn globals(&self) -> Vec<String>;
-    fn bounds(&self, param: &str) -> Result<Bounds>;
-    fn ports(&self) -> Vec<MidiPort>;
-    fn connect(&self, midi_client: MidiOutput, port: &MidiPort) -> Result<Box<dyn Device>>;
+fn ports(schema: &schema::Device) -> Vec<DevicePort> {
+    let midi_client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
+    devices::output_ports(&midi_client)
+        .into_iter()
+        .filter_map(|port| {
+            if port.name.starts_with(schema.port_prefix) {
+                Some(DevicePort{
+                    schema: schema.clone(),
+                    port
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
-pub trait Parameter {
-    //    fn from_sysex(message: &[u8]) -> &Parameter;
-    //    fn from_str(name: &str) -> &Parameter;
+pub struct Device {
+    schema: schema::Device,
+    midi_connection: MidiOutputConnection,
+    port_name: String,
+    msg_id: usize,
 }
 
-pub trait Device {
-    fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>>;
-    fn update(&mut self, param: &str, value_ids: &[String]) -> Result<()>;
+impl Device {
+
+
+    fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>> {}
+
+
+    fn read_msg(message: &[u8]) -> Result<Setting> {}
+}
+
+
+
+
+pub struct Setting {
+    key: ParamKey,
+    values: Vec<u8>,
+}
+
+impl Setting {
+    fn update(&mut self, param: &str, value_ids: &[String]) -> Result<()> {}
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +264,15 @@ pub enum DeviceError {
         device_name: String,
     },
     UnknownParameter {
+        param_name: String,
+    },
+    BadFormatParameter {
+        param_name: String,
+    },
+    BadIndexParameter {
+        param_name: String,
+    },
+    BadModeParameter {
         param_name: String,
     },
     EmptyParameter,
