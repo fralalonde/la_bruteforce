@@ -1,5 +1,10 @@
 name: MicroBrute
-vendor: Arturia
+vendor:
+  name: Arturia
+  sysex:
+    - 0x00
+    - 0x20
+    - 0x6b
 port_prefix: MicroBrute
 sysex:
   - 0x05

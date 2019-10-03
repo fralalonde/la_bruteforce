@@ -33,7 +33,9 @@ enum Cmd {
         /// Name of the device as listed
         device_name: String,
         /// Name of the param as listed
-        param_name: String,
+        param_key: String,
+        /// Name of field to get bounds of
+        field_name: Option<String>,
     },
 
     #[structopt(name = "get")]
@@ -42,7 +44,7 @@ enum Cmd {
         /// Name of the device as listed
         device_name: String,
         /// Name of the param as listed
-        param_names: Vec<String>,
+        param_keys: Vec<String>,
     },
 
     #[structopt(name = "set")]
@@ -51,7 +53,7 @@ enum Cmd {
         /// Name of the device as listed
         device_name: String,
         /// Name of the param as listed
-        param_name: String,
+        param_key: String,
         /// New bound value of the param
         value_ids: Vec<String>,
     },
@@ -60,6 +62,7 @@ enum Cmd {
 use crate::devices::Bounds;
 use crate::devices::CLIENT_NAME;
 use std::str::FromStr;
+use crate::schema::ParamKey;
 
 fn main() -> devices::Result<()> {
     let cmd = Cmd::from_args();
@@ -71,46 +74,67 @@ fn main() -> devices::Result<()> {
                 .iter()
                 .for_each(|port| println!("{}", port.name))
         }
-        Cmd::Devices => DeviceType::iter().for_each(|dev| println!("{}", dev)),
+
+        Cmd::Devices => schema::SCHEMAS.keys().iter()
+            .for_each(|dev| println!("{}", dev)),
+
         Cmd::Params { device_name } => {
-            let dev = DeviceType::from_str(&device_name)?;
-            for param in dev.descriptor().globals() {
+            let mut dev: schema::Device = schema::SCHEMAS.get(&device_name)?;
+            for (name, param) in dev.parameters.clone().entries() {
+                if let Some(range) = param.range {
+                    for i in range.lo..range.hi {
+                        
+                    }
+                }
                 println!("{}", param);
             }
         }
         Cmd::Bounds {
             device_name,
-            param_name,
+            param_key,
+            field_name,
         } => {
-            let dev = DeviceType::from_str(&device_name)?;
-            match dev.descriptor().bounds(&param_name)? {
-                Bounds::Discrete(values) => {
-                    for bound in values {
-                        println!("{}", bound.1)
+            let dev: schema::Device = schema::SCHEMAS.get(&device_name)?;
+            let param_key = dev.parse_key(&param_key)?;
+            let bounds = param_key.bounds(field_name)?;
+            for bound in bounds {
+                match bound {
+                    schema::Bounds::Values(values) => {
+                        for value in values {
+                            println!("{}", value.1)
+                        }
                     }
+                    schema::Bounds(range) => println!("[{}..{}]", range.lo, range.hi),
+                    schema::Bounds::NoteSeq(_) => println!("note1 note2 note3 ..."),
                 }
-                Bounds::Range(_offset, (lo, hi)) => println!("[{}..{}]", lo, hi),
-                Bounds::NoteSeq(_) => println!("note1 note2 note3 ..."),
             }
-        }
+        },
         Cmd::Set {
             device_name,
-            param_name,
+            param_key,
             value_ids,
         } => {
-            let dev = DeviceType::from_str(&device_name)?.descriptor();
-            let midi_client = MidiOutput::new(CLIENT_NAME)?;
-            if let Some(port) = dev.ports().get(0) {
-                let mut sysex = dev.connect(midi_client, port)?;
-                sysex.update(&param_name, &value_ids)?;
-            } else {
-                return Err(Box::new(DeviceError::NoConnectedDevice { device_name }));
-            }
+            let dev: schema::Device = schema::SCHEMAS.get(&device_name)?;
+            let param_key = dev.parse_key(&param_key)?;
+            let mut dev = dev.locate()?.connect()?;
+            dev.update(&param_key, &value_ids)?;
         }
         Cmd::Get {
             device_name,
             mut param_names,
         } => {
+            let dev: schema::Device = schema::SCHEMAS.get(&device_name)?;
+            if param_names.is_empty() {
+                param_names = dev.parameters.keys().collect();
+            }
+
+            let mut dev = dev.locate()?.connect()?;
+            for p in param_names {
+                let param_key = dev.parse_key(&p)?;
+                dev.query(&param_key)?;
+            }
+
+
             let dev = DeviceType::from_str(&device_name)?.descriptor();
             let midi_client = MidiOutput::new(CLIENT_NAME)?;
             let port = dev

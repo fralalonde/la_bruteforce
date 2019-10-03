@@ -4,7 +4,7 @@ use midir::{MidiOutput, MidiOutputConnection};
 use midir::{MidiInput, MidiInputConnection};
 
 //mod beatstep;
-mod microbrute;
+//mod microbrute;
 
 use snafu::Snafu;
 
@@ -20,6 +20,7 @@ use strum::IntoEnumIterator;
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
 use crate::{schema, devices};
+use crate::schema::ParamKey;
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -100,29 +101,53 @@ impl FromStr for MidiNote {
 
 #[derive(Debug, Clone)]
 pub struct MidiPort {
-    number: usize,
-    name: String,
+    pub number: usize,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct DevicePort {
-    schema: schema::Device,
-    port: MidiPort,
+    pub schema: schema::Device,
+    pub client: MidiOutput,
+    pub port: MidiPort,
 }
 
-
-impl MidiPort {
-    fn connect(&self, schema: schema::Device) -> Result<Device> {
-        let midi_client = MidiOutput::new(CLIENT_NAME)?;
-        let midi_connection = midi_client.connect(port.number, &port.name)?;
+impl DevicePort {
+    pub fn connect(self) -> Result<devices::Device> {
+        let connection = self.client.connect(self.port.number, &self.port.name)?;
         let mut device = Device {
-            schema,
-            midi_connection,
-            port_name: port.name.to_owned(),
+            port: self,
+            connection,
             msg_id: 0,
         };
         device.identify()?;
         Ok(device)
+    }
+
+    pub fn sysex_receiver<D>(&self, match_header: &'static [u8], decode: D) -> Result<SysexReceiver>
+        where D: Fn(&[u8], &mut LinkedHashMap<String, Vec<String>>) + Send + 'static,
+    {
+        let midi_in = MidiInput::new(CLIENT_NAME)?;
+        if let Some(in_port) = matching_input_port(&midi_in, &self.port.name) {
+            Ok(SysexQuery(midi_in.connect(
+                in_port.number,
+                "Query Results",
+                move |_ts, message, result_map| {
+                    if message[0] == 0xf0
+                        && message[message.len() - 1] == 0xf7
+                        && message[1..].starts_with(match_header)
+                    {
+                        let subslice = &message[match_header.len() + 1..message.len() - 1];
+                        decode(subslice, result_map);
+                    }
+                },
+                LinkedHashMap::new(),
+            )?))
+        } else {
+            Err(Box::new(DeviceError::NoInputPort {
+                port_name: port_name.to_string(),
+            }))
+        }
     }
 }
 
@@ -135,51 +160,17 @@ pub fn output_ports(midi_client: &MidiOutput) -> Vec<MidiPort> {
     v
 }
 
-fn input_port(midi: &MidiInput, name4: &str) -> Option<MidiPort> {
-    for number in 0..midi.port_count() {
-        if let Ok(name) = midi.port_name(number) {
-            if name4.eq(&name) {
-                return Some(MidiPort { name, number });
-            }
-        }
-    }
-    None
+fn matching_input_port(midi: &MidiInput, out_port: &str) -> Result<MidiPort> {
+    (0..midi.port_count()).iter()
+        .map(|number| Ok(MidiPort{ name: midi.port_name(number)?, number}))
+        .find(|port| port.name.eq(out_port))
+        .ok_or(DeviceError::NoInputPort { port_name: out_port.to_string() })
 }
 
-pub fn sysex_query_init<D>(
-    port_name: &str,
-    match_header: &'static [u8],
-    decode: D,
-) -> Result<SysexQuery>
-where
-    D: Fn(&[u8], &mut LinkedHashMap<String, Vec<String>>) + Send + 'static,
-{
-    let midi_in = MidiInput::new(CLIENT_NAME)?;
-    if let Some(in_port) = input_port(&midi_in, port_name) {
-        Ok(SysexQuery(midi_in.connect(
-            in_port.number,
-            "Query Results",
-            move |_ts, message, result_map| {
-                if message[0] == 0xf0
-                    && message[message.len() - 1] == 0xf7
-                    && message[1..].starts_with(match_header)
-                {
-                    let subslice = &message[match_header.len() + 1..message.len() - 1];
-                    decode(subslice, result_map);
-                }
-            },
-            LinkedHashMap::new(),
-        )?))
-    } else {
-        Err(Box::new(DeviceError::NoInputPort {
-            port_name: port_name.to_string(),
-        }))
-    }
-}
 
-pub struct SysexQuery(MidiInputConnection<LinkedHashMap<String, Vec<String>>>);
+pub struct SysexReceiver(MidiInputConnection<LinkedHashMap<String, Vec<String>>>);
 
-impl SysexQuery {
+impl SysexReceiver {
     pub fn close_wait(self, wait_millis: u64) -> LinkedHashMap<String, Vec<String>> {
         sleep(Duration::from_millis(wait_millis));
         self.0.close().1
@@ -201,49 +192,50 @@ impl DeviceType {
     }
 }
 
-fn ports(schema: &schema::Device) -> Vec<DevicePort> {
-    let midi_client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
-    devices::output_ports(&midi_client)
-        .into_iter()
-        .filter_map(|port| {
-            if port.name.starts_with(schema.port_prefix) {
-                Some(DevicePort{
-                    schema: schema.clone(),
-                    port
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 pub struct Device {
-    schema: schema::Device,
-    midi_connection: MidiOutputConnection,
-    port_name: String,
+    port: DevicePort,
+    connection: MidiOutputConnection,
     msg_id: usize,
 }
 
 impl Device {
 
+    pub fn identify(&mut self) -> Result<()> {
+        static ID_KEY: &str = "ID";
+        let sysex_replies =
+            self.port.sysex_receiver(IDENTITY_REPLY, |msg, result| {
+                if msg.starts_with(&[
+                    &self.port.schema.vendor.sysex,
+                    &self.port.schema.sysex]
+                    .concat()) {
+                    // TODO could grab firmware version, etc. for return
+                    let _ = result.insert(ID_KEY.to_string(), vec![]);
+                } else {
+                    eprintln!("received spurious sysex {}", hex::encode(msg));
+                }
+            })?;
+        self.connection.send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
+        sysex_replies
+            .close_wait(500)
+            .iter()
+            .next()
+            .ok_or(DeviceError::NoIdentificationReply)?;
+        self.msg_id += 1;
+        Ok(())
+    }
 
-    fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>> {}
+    pub fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>> {
 
+    }
 
-    fn read_msg(message: &[u8]) -> Result<Setting> {}
-}
+    pub fn update(&mut self, param: &ParamKey, value_ids: &[String]) -> Result<()> {
+        // convert values by mode?>field?>bounds
 
+        // check that all fields filled out
 
+        // send mode & field updates
+    }
 
-
-pub struct Setting {
-    key: ParamKey,
-    values: Vec<u8>,
-}
-
-impl Setting {
-    fn update(&mut self, param: &str, value_ids: &[String]) -> Result<()> {}
 }
 
 #[derive(Debug, Clone)]
@@ -287,6 +279,12 @@ pub enum DeviceError {
     },
     NoInputPort {
         port_name: String,
+    },
+    BadField {
+        param_key: ParamKey,
+    },
+    NoBounds {
+        param_key: ParamKey,
     },
     InvalidParam {
         device_name: String,

@@ -3,78 +3,61 @@ pub type Sysex = Vec<u8>;
 
 use serde::{Deserialize, Serialize};
 
-use crate::devices::{DeviceError, Result, MidiPort, CLIENT_NAME};
+use crate::devices::{DeviceError, Result, MidiPort, CLIENT_NAME, DevicePort};
 use std::convert::TryFrom;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use crate::devices;
 use midir::MidiOutput;
 use regex::Regex;
 use std::str::FromStr;
+use linked_hash_map::LinkedHashMap;
 
-//lazy_static!{
-//    static ref
-//}
-
-#[derive(Debug, EnumString, IntoStaticStr, EnumIter, Display)]
-pub enum DeviceType {
-    MicroBrute,
-    BeatStep,
+lazy_static!{
+    pub static ref SCHEMAS: &LinkedHashMap<String, Device> = &load_schemas();
 }
 
-//impl From<DeviceType> for Device {
-//    fn from(dev: DeviceType) -> Self {
-//
-//    }
-//}
-
-impl TryFrom<&str> for Device {
-    type Error = Box<dyn ::std::error::Error>;
-
-    fn try_from(name: &str) -> Result<Device> {
-        match name {
-            "MicroBrute" => parse(include_str!("MicroBrute.yaml")),
-            _ => Err(Box::new(DeviceError::UnknownDevice {
-                device_name: name.to_string(),
-            })),
-        }
-    }
+fn load_schemas() -> HashMap<String, Device> {
+    let mut map = LinkedHashMap::new();
+    let mut dev = parse_schema(include_str!("MicroBrute.yaml")).unwrap();
+    map.insert(dev.name, dev);
+    map
 }
 
-fn parse(body: &str) -> Result<Device> {
+fn parse_schema(body: &str) -> Result<Device> {
     Ok(serde_yaml::from_str(body)?)
+}
+
+pub struct Vendor {
+    pub name: String,
+    pub sysex: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Device {
-    pub vendor: String,
+    pub vendor: Vendor,
     pub port_prefix: String,
     pub sysex: Sysex,
-    pub parameters: BTreeMap<String, Parameter>,
+    pub parameters: LinkedHashMap<String, Parameter>,
 }
 
 impl Device {
-//    fn parameters(&self) -> Vec<String> {
-//        MicrobruteGlobals::iter()
-//            .flat_map(|p| {
-//                if let Some(max) = p.max_index() {
-//                    (1..=max)
-//                        .map(|idx| format!("{}/{}", p.as_ref(), idx))
-//                        .collect()
-//                } else {
-//                    vec![p.as_ref().to_string()]
-//                }
-//            })
-//            .collect()
-//    }
-//
-//    fn bounds(&self, param: &str) -> Result<Bounds> {
-//        Ok(bounds(MicrobruteGlobals::parse(param)?))
-//    }
 
-    fn read_key(&self, param_str: String) -> Result<ParamKey> {
+    pub fn locate(&self) -> Result<DevicePort> {
+        let client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
+        devices::output_ports(&client)
+            .into_iter()
+            .find(|port| port.name.starts_with(schema.port_prefix))
+            .map(|port| Some(devices::DevicePort{
+                schema: self.clone(),
+                client,
+                port: *port
+            }))
+    }
+
+    pub fn parse_key(&self, param_key: &str) -> Result<ParamKey> {
         static RE: Regex = Regex::new(r"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))")?;
 
-        if let Some(cap) = RE.captures(&param_str) {
+        if let Some(cap) = RE.captures(param_key) {
             let param_match = cap.name("name")?.as_str();
             let param = self.parameters.get(param_match)?;
 
@@ -82,19 +65,19 @@ impl Device {
             let index = match (index_val, param.range) {
                 (Some(value), Some(range)) if value >= range.lo && value <= range.hi => Some(value),
                 (None, None) => None,
-                _ => return Err(Box::new(DeviceError::BadIndexParameter{param_name: param_str.to_string()}))
+                _ => return Err(Box::new(DeviceError::BadIndexParameter{param_name: param_key.to_string()}))
             };
 
             let mode = match (cap.name("mode"), &param.modes) {
                 (Some(mode_str), Some(modes)) => {
                     if let Some(mode) = modes.get(mode_str.as_str()) {
-                        Some(*mode)
+                        Some(mode.clone())
                     } else {
-                        return Err(Box::new(DeviceError::BadModeParameter{param_name: param_str.to_string()}))
+                        return Err(Box::new(DeviceError::BadModeParameter{param_name: param_key.to_string()}))
                     }
                 },
                 (None, None) => None,
-                _ => return Err(Box::new(DeviceError::BadModeParameter{param_name: param_str.to_string()}))
+                _ => return Err(Box::new(DeviceError::BadModeParameter{param_name: param_key.to_string()}))
             };
 
             ParamKey {
@@ -103,22 +86,59 @@ impl Device {
                 mode,
             }
         } else {
-            Err(Box::new(DeviceError::UnknownParam{param_name: param_str.to_string()}))
+            Err(Box::new(DeviceError::UnknownParam{param_name: param_key.to_string()}))
         }
     }
 
 }
 
 pub struct ParamKey {
-    param: Parameter,
-    index: Option<usize>,
-    mode: Option<Mode>,
+    pub param: Parameter,
+    pub index: Option<usize>,
+    pub mode: Option<Mode>,
 }
 
 impl ParamKey {
+    pub fn bounds(&self, field_name: Option<String>) -> Result<Vec<Bounds>> {
+        match (self, field_name) {
+            (ParamKey{ mode, .. }, Some(field_name)) => {
+                mode.fields.get(field_name)
+                    .ok_or(DeviceError::BadField { param_key })
+            },
+            (ParamKey{ param, .. }, None) => param.bounds
+                .ok_or(DeviceError::NoBounds { param_key }),
+            _ => Err(Box::new(DeviceError::NoBounds { param_key }))
+        }
+    }
+
+    fn fields(&self) -> Option<LinkedHashMap<String, Vec<Bounds>>> {
+        self.mode.map(|mode| mode.fields)
+    }
+
+    pub fn parse_value(&self, value: &str) -> Result<Value> {
+        match (value.split("=").collect(), self.fields()) {
+            [field_name, value] => {
+                for b in self.bounds(field_name)? {
+                    if let Some(v) = b.convert(value) {
+                        return Value::FieldValue(field_name, v)
+                    }
+                }
+            },
+            [value] => {
+
+            },
+            _ =>
+        }
+    }
+
     fn read_values(&self, key: &ParamKey, values_str: Vec<String>) -> Result<Vec<u8>> {
 
     }
+}
+
+pub enum Value {
+    ParamValue(String),
+    FieldValue(String, String)
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -126,7 +146,7 @@ pub struct Parameter {
     pub sysex: Sysex,
     pub range: Option<Range>,
     pub bounds: Option<Vec<Bounds>>,
-    pub modes: Option<BTreeMap<String, Mode>>,
+    pub modes: Option<LinkedHashMap<String, Mode>>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -135,14 +155,19 @@ pub struct Mode {
     pub fields: Fields,
 }
 
-pub type Fields = BTreeMap<String, Vec<Bounds>>;
+pub type Fields = LinkedHashMap<String, Field>;
+
+pub struct Field {
+    pub sysex: Sysex,
+    pub bounds: Vec<Bounds>,
+}
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-//#[serde(tag = "type")]
+//#[serde(tag = "type")] /*maybe we can get away without*/
 #[serde(untagged)]
 pub enum Bounds {
     /// Name / Value pair
-    Values(BTreeMap<String, u8>),
+    Values(LinkedHashMap<String, u8>),
 
     /// Raw value offset and display value bounds (Low to High, inclusive)
     Range(Range),
@@ -166,11 +191,11 @@ pub struct NoteSeq {
 
 #[cfg(test)]
 mod test {
-    use crate::schema::{parse, Device};
+    use crate::schema::{parse_schema, Device};
 
     #[test]
     fn test_parse() {
-        let z: Device = parse(
+        let z: Device = parse_schema(
             r"
 name: MicroBrute
 vendor: Arturia

@@ -89,28 +89,7 @@ impl MicroBruteDevice {z
     }
 
     // TODO return device version / id string
-    fn identify(&mut self) -> Result<()> {
-        static ID_KEY: &str = "ID";
-        let sysex_replies =
-            devices::sysex_query_init(&self.port_name, IDENTITY_REPLY, |msg, result| {
-                if msg.starts_with(ARTURIA) {
-                    // TODO could grab firmware version
-                    let _ = result.insert(ID_KEY.to_string(), vec![]);
-                } else {
-                    eprintln!("received spurious sysex {}", hex::encode(msg));
-                }
-            })?;
-        self.midi_connection
-            .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
-        sysex_replies
-            .close_wait(500)
-            .iter()
-            .next()
-            .ok_or(DeviceError::NoIdentificationReply)?;
 
-        self.msg_id += 1;
-        Ok(())
-    }
 }
 
 impl Device for MicroBruteDevice {
