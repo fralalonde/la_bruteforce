@@ -11,9 +11,11 @@ use midir::MidiOutput;
 use regex::Regex;
 use std::str::FromStr;
 use linked_hash_map::LinkedHashMap;
+use std::fmt::{Display, Formatter, Error};
+use std::fmt;
 
 lazy_static!{
-    pub static ref SCHEMAS: &LinkedHashMap<String, Device> = &load_schemas();
+    pub static ref SCHEMAS: &'static LinkedHashMap<String, Device> = &load_schemas();
 }
 
 fn load_schemas() -> HashMap<String, Device> {
@@ -46,7 +48,7 @@ impl Device {
         let client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
         devices::output_ports(&client)
             .into_iter()
-            .find(|port| port.name.starts_with(schema.port_prefix))
+            .find(|port| port.name.starts_with(self.port_prefix))
             .map(|port| Some(devices::DevicePort{
                 schema: self.clone(),
                 client,
@@ -55,7 +57,7 @@ impl Device {
     }
 
     pub fn parse_key(&self, param_key: &str) -> Result<ParamKey> {
-        static RE: Regex = Regex::new(r"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))")?;
+        static RE: Regex = Regex::new(r#"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))"#).unwrap();
 
         if let Some(cap) = RE.captures(param_key) {
             let param_match = cap.name("name")?.as_str();
@@ -93,9 +95,23 @@ impl Device {
 }
 
 pub struct ParamKey {
+    pub name: String,
     pub param: Parameter,
     pub index: Option<usize>,
     pub mode: Option<Mode>,
+}
+
+impl Display for ParamKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)?;
+        if let Some(index) = &self.index {
+            f.write_fmt("/{}", index)?;
+        }
+        if let Some(mode) = &self.mode {
+            f.write_fmt(":{}", mode)?;
+        }
+        Ok(())
+    }
 }
 
 impl ParamKey {
@@ -103,11 +119,10 @@ impl ParamKey {
         match (self, field_name) {
             (ParamKey{ mode, .. }, Some(field_name)) => {
                 mode.fields.get(field_name)
-                    .ok_or(DeviceError::BadField { param_key })
+                    .ok_or(DeviceError::BadField { field_name })
             },
-            (ParamKey{ param, .. }, None) => param.bounds
-                .ok_or(DeviceError::NoBounds { param_key }),
-            _ => Err(Box::new(DeviceError::NoBounds { param_key }))
+            (ParamKey{ param, .. }, None) => param.bounds?,
+            _ => Err(Box::new(DeviceError::NoBounds))
         }
     }
 
@@ -120,20 +135,22 @@ impl ParamKey {
             [field_name, value] => {
                 for b in self.bounds(field_name)? {
                     if let Some(v) = b.convert(value) {
-                        return Value::FieldValue(field_name, v)
+                        return Ok(Value::FieldValue(field_name, v));
                     }
                 }
             },
             [value] => {
-
+                for b in self.bounds(None)? {
+                    if let Some(v) = b.convert(value) {
+                        return Ok(Value::ParamValue(v))
+                    }
+                }
             },
-            _ =>
+            _ => {}
         }
+        Err(Box::new(DeviceError::ValueOutOfBound {value_name: value.to_string()}))
     }
 
-    fn read_values(&self, key: &ParamKey, values_str: Vec<String>) -> Result<Vec<u8>> {
-
-    }
 }
 
 pub enum Value {

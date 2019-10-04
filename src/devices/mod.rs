@@ -105,7 +105,6 @@ pub struct MidiPort {
     pub name: String,
 }
 
-#[derive(Debug, Clone)]
 pub struct DevicePort {
     pub schema: schema::Device,
     pub client: MidiOutput,
@@ -129,7 +128,7 @@ impl DevicePort {
     {
         let midi_in = MidiInput::new(CLIENT_NAME)?;
         if let Some(in_port) = matching_input_port(&midi_in, &self.port.name) {
-            Ok(SysexQuery(midi_in.connect(
+            Ok(SysexReceiver(midi_in.connect(
                 in_port.number,
                 "Query Results",
                 move |_ts, message, result_map| {
@@ -145,7 +144,7 @@ impl DevicePort {
             )?))
         } else {
             Err(Box::new(DeviceError::NoInputPort {
-                port_name: port_name.to_string(),
+                port_name: self.port.name.clone(),
             }))
         }
     }
@@ -160,11 +159,10 @@ pub fn output_ports(midi_client: &MidiOutput) -> Vec<MidiPort> {
     v
 }
 
-fn matching_input_port(midi: &MidiInput, out_port: &str) -> Result<MidiPort> {
-    (0..midi.port_count()).iter()
-        .map(|number| Ok(MidiPort{ name: midi.port_name(number)?, number}))
+fn matching_input_port(midi: &MidiInput, out_port: &str) -> Option<MidiPort> {
+    (0..midi.port_count())
+        .map(|number| MidiPort{ name: midi.port_name(number).unwrap(), number})
         .find(|port| port.name.eq(out_port))
-        .ok_or(DeviceError::NoInputPort { port_name: out_port.to_string() })
 }
 
 
@@ -183,14 +181,14 @@ pub enum DeviceType {
     //    BeatStep,
 }
 
-impl DeviceType {
-    pub fn descriptor(&self) -> Box<dyn Descriptor> {
-        match self {
-            DeviceType::MicroBrute => Box::new(microbrute::MicroBruteDescriptor {}),
-            //            DeviceType::BeatStep => Box::new(beatstep::BeatStepDescriptor {}),
-        }
-    }
-}
+//impl DeviceType {
+//    pub fn descriptor(&self) -> Box<dyn Descriptor> {
+//        match self {
+//            DeviceType::MicroBrute => Box::new(microbrute::MicroBruteDescriptor {}),
+//            //            DeviceType::BeatStep => Box::new(beatstep::BeatStepDescriptor {}),
+//        }
+//    }
+//}
 
 pub struct Device {
     port: DevicePort,
@@ -205,8 +203,8 @@ impl Device {
         let sysex_replies =
             self.port.sysex_receiver(IDENTITY_REPLY, |msg, result| {
                 if msg.starts_with(&[
-                    &self.port.schema.vendor.sysex,
-                    &self.port.schema.sysex]
+                    self.port.schema.vendor.sysex.as_slice(),
+                    self.port.schema.sysex.as_slice()]
                     .concat()) {
                     // TODO could grab firmware version, etc. for return
                     let _ = result.insert(ID_KEY.to_string(), vec![]);
@@ -224,8 +222,8 @@ impl Device {
         Ok(())
     }
 
-    pub fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>> {
-
+    pub fn query(&mut self, params: &ParamKey) -> Result<Vec<String>> {
+        Ok(vec![])
     }
 
     pub fn update(&mut self, param: &ParamKey, value_ids: &[String]) -> Result<()> {
@@ -234,6 +232,8 @@ impl Device {
         // check that all fields filled out
 
         // send mode & field updates
+
+        Ok(())
     }
 
 }
@@ -281,11 +281,9 @@ pub enum DeviceError {
         port_name: String,
     },
     BadField {
-        param_key: ParamKey,
+        field_name: String,
     },
-    NoBounds {
-        param_key: ParamKey,
-    },
+    NoBounds,
     InvalidParam {
         device_name: String,
         param_name: String,

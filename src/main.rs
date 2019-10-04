@@ -2,6 +2,9 @@ extern crate strum;
 #[macro_use]
 extern crate strum_macros;
 
+#[macro_use]
+extern crate lazy_static;
+
 mod devices;
 mod schema;
 
@@ -62,7 +65,7 @@ enum Cmd {
 use crate::devices::Bounds;
 use crate::devices::CLIENT_NAME;
 use std::str::FromStr;
-use crate::schema::ParamKey;
+use crate::schema::{ParamKey, Parameter};
 
 fn main() -> devices::Result<()> {
     let cmd = Cmd::from_args();
@@ -75,18 +78,21 @@ fn main() -> devices::Result<()> {
                 .for_each(|port| println!("{}", port.name))
         }
 
-        Cmd::Devices => schema::SCHEMAS.keys().iter()
+        Cmd::Devices => schema::SCHEMAS.keys()
             .for_each(|dev| println!("{}", dev)),
 
         Cmd::Params { device_name } => {
-            let mut dev: schema::Device = schema::SCHEMAS.get(&device_name)?;
-            for (name, param) in dev.parameters.clone().entries() {
+            let mut dev = schema::SCHEMAS.get(&device_name)
+                .ok_or(DeviceError::UnknownDevice { device_name })?;
+            for (name, param) in dev.parameters.iter() {
+                print!("{}", name);
                 if let Some(range) = param.range {
-                    for i in range.lo..range.hi {
-                        
-                    }
+                    print!("/{}..{}", range.lo, range.hi);
                 }
-                println!("{}", param);
+                if let Some(modes) = param.modes {
+                    let z: Vec<String> = modes.keys().map(|s| s.to_string()).collect();
+                    print!(":[{}]", z.join("|"));
+                }
             }
         }
         Cmd::Bounds {
@@ -94,7 +100,8 @@ fn main() -> devices::Result<()> {
             param_key,
             field_name,
         } => {
-            let dev: schema::Device = schema::SCHEMAS.get(&device_name)?;
+            let dev = schema::SCHEMAS.get(&device_name)
+                .ok_or(DeviceError::UnknownDevice { device_name })?;
             let param_key = dev.parse_key(&param_key)?;
             let bounds = param_key.bounds(field_name)?;
             for bound in bounds {
@@ -104,7 +111,7 @@ fn main() -> devices::Result<()> {
                             println!("{}", value.1)
                         }
                     }
-                    schema::Bounds(range) => println!("[{}..{}]", range.lo, range.hi),
+                    schema::Bounds::Range(range) => println!("[{}..{}]", range.lo, range.hi),
                     schema::Bounds::NoteSeq(_) => println!("note1 note2 note3 ..."),
                 }
             }
@@ -114,42 +121,36 @@ fn main() -> devices::Result<()> {
             param_key,
             value_ids,
         } => {
-            let dev: schema::Device = schema::SCHEMAS.get(&device_name)?;
+            let dev = schema::SCHEMAS.get(&device_name)
+                .ok_or(DeviceError::UnknownDevice { device_name })?;
             let param_key = dev.parse_key(&param_key)?;
             let mut dev = dev.locate()?.connect()?;
             dev.update(&param_key, &value_ids)?;
         }
         Cmd::Get {
             device_name,
-            mut param_names,
+            mut param_keys,
         } => {
-            let dev: schema::Device = schema::SCHEMAS.get(&device_name)?;
-            if param_names.is_empty() {
-                param_names = dev.parameters.keys().collect();
+            let dev = schema::SCHEMAS.get(&device_name)
+                .ok_or(DeviceError::UnknownDevice { device_name })?;
+            if param_keys.is_empty() {
+                param_keys = dev.parameters.iter()
+                    .flat_map(|(name, param)|
+                        if let Some(range) = param.range {
+                            (range.lo..range.hi + 1)
+                                .map(|index| format!{"{}/{}", name, index} )
+                                .collect()
+                        } else {
+                            vec![name.to_string()]
+                        })
+                    .collect();
             }
 
-            let mut dev = dev.locate()?.connect()?;
-            for p in param_names {
+            let mut loc = dev.locate()?.connect()?;
+            for p in param_keys {
                 let param_key = dev.parse_key(&p)?;
-                dev.query(&param_key)?;
-            }
-
-
-            let dev = DeviceType::from_str(&device_name)?.descriptor();
-            let midi_client = MidiOutput::new(CLIENT_NAME)?;
-            let port = dev
-                .ports()
-                .get(0)
-                .cloned()
-                .ok_or(DeviceError::NoOutputPort {
-                    port_name: device_name,
-                })?;
-            let mut sysex = dev.connect(midi_client, &port)?;
-            if param_names.is_empty() {
-                param_names = dev.globals().iter().map(|p| p.to_string()).collect();
-            }
-            for pair in sysex.query(param_names.as_slice())? {
-                println!("{} {}", pair.0, pair.1.join(" "))
+                let values = loc.query(&param_key)?;
+                println!("{} {}", param_key, values.join(" "));
             }
         }
     }
