@@ -12,7 +12,7 @@ use midir::MidiOutput;
 use structopt::StructOpt;
 use strum::IntoEnumIterator;
 
-use crate::devices::{DeviceError, DeviceType};
+use crate::devices::{DeviceError};
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -62,10 +62,7 @@ enum Cmd {
     },
 }
 
-use crate::devices::Bounds;
 use crate::devices::CLIENT_NAME;
-use std::str::FromStr;
-use crate::schema::{ParamKey, Parameter};
 
 fn main() -> devices::Result<()> {
     let cmd = Cmd::from_args();

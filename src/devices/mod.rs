@@ -18,7 +18,6 @@ use std::thread::sleep;
 use std::error::Error;
 use strum::IntoEnumIterator;
 use linked_hash_map::LinkedHashMap;
-use regex::Regex;
 use crate::{schema, devices};
 use crate::schema::ParamKey;
 
@@ -200,12 +199,14 @@ impl Device {
 
     pub fn identify(&mut self) -> Result<()> {
         static ID_KEY: &str = "ID";
+
+        let header = &[
+            self.port.schema.vendor.sysex.as_slice(),
+            self.port.schema.sysex.as_slice()]
+            .concat();
         let sysex_replies =
             self.port.sysex_receiver(IDENTITY_REPLY, |msg, result| {
-                if msg.starts_with(&[
-                    self.port.schema.vendor.sysex.as_slice(),
-                    self.port.schema.sysex.as_slice()]
-                    .concat()) {
+                if msg.starts_with(header) {
                     // TODO could grab firmware version, etc. for return
                     let _ = result.insert(ID_KEY.to_string(), vec![]);
                 } else {
@@ -281,6 +282,9 @@ pub enum DeviceError {
         port_name: String,
     },
     BadField {
+        field_name: String,
+    },
+    BadSchema {
         field_name: String,
     },
     NoBounds,
