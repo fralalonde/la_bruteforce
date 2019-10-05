@@ -3,7 +3,7 @@ pub type Sysex = Vec<u8>;
 
 use serde::{Deserialize, Serialize};
 
-use crate::devices::{DeviceError, Result, CLIENT_NAME, DevicePort};
+use crate::devices::{DeviceError, Result, CLIENT_NAME, DevicePort, MidiNote};
 use crate::devices;
 use midir::MidiOutput;
 use regex::Regex;
@@ -12,13 +12,13 @@ use linked_hash_map::LinkedHashMap;
 use std::fmt;
 
 lazy_static!{
-    pub static ref SCHEMAS: &'static LinkedHashMap<String, Device> = &load_schemas();
+    pub static ref SCHEMAS: LinkedHashMap<String, Device> = load_schemas();
 }
 
 fn load_schemas() -> LinkedHashMap<String, Device> {
     let mut map = LinkedHashMap::new();
     let dev = parse_schema(include_str!("MicroBrute.yaml")).unwrap();
-    map.insert(dev.name, dev);
+    map.insert(dev.name.clone(), dev);
     map
 }
 
@@ -57,7 +57,7 @@ impl Device {
     }
 
     pub fn parse_key(&self, param_key: &str) -> Result<ParamKey> {
-        static RE: Regex = Regex::new(r#"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))"#).unwrap();
+        let RE: Regex = Regex::new(r#"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))"#).unwrap();
 
         if let Some(cap) = RE.captures(param_key) {
             let name = cap.name("name")
@@ -119,32 +119,33 @@ impl fmt::Display for ParamKey {
 }
 
 impl ParamKey {
-    pub fn bounds(&self, field_name: Option<String>) -> Result<Vec<Bounds>> {
+    pub fn bounds(&self, field_name: Option<&str>) -> Result<Vec<Bounds>> {
         match (self, field_name) {
             (ParamKey{ mode: Some(mode), .. }, Some(field_name)) =>
-                Ok(mode.fields.get(&field_name)
-                    .ok_or(DeviceError::BadField { field_name })?.bounds.clone()),
-            (_, None) => Ok(self.param.bounds.ok_or(DeviceError::BadSchema { field_name: self.name })?),
+                Ok(mode.fields.get(field_name)
+                    .ok_or(DeviceError::BadField { field_name: field_name.to_string() })?.bounds.clone()),
+            (_, None) => Ok(self.param.bounds.clone().ok_or(DeviceError::BadSchema { field_name: self.name.clone() })?),
             _ => Err(Box::new(DeviceError::NoBounds))
         }
     }
 
     fn fields(&self) -> Option<LinkedHashMap<String, Field>> {
-        self.mode.map(|mode| mode.fields)
+        self.mode.clone().map(|mode| mode.fields)
     }
 
     pub fn parse_value(&self, value: &str) -> Result<Value> {
-        match (value.split("=").collect(), self.fields()) {
-            (field_name, Some(fields)) => {
-                for b in self.bounds(field_name)? {
-                    if let Some(v) = b.convert(value) {
-                        return Ok(Value::FieldValue(field_name, v));
+        let parts: Vec<&str> = value.split("=").collect();
+        match (parts.as_slice(), &self.fields()) {
+            ([field_name, value], Some(fields)) => {
+                for b in self.bounds(Some(field_name))? {
+                    if let Ok(v) = b.convert(value) {
+                        return Ok(Value::FieldValue(field_name.to_string(), v));
                     }
                 }
             },
-            (value, None) => {
+            ([value], None) => {
                 for b in self.bounds(None)? {
-                    if let Some(v) = b.convert(value) {
+                    if let Ok(v) = b.convert(value) {
                         return Ok(Value::ParamValue(v))
                     }
                 }
@@ -157,8 +158,8 @@ impl ParamKey {
 }
 
 pub enum Value {
-    ParamValue(String),
-    FieldValue(String, String)
+    ParamValue(Vec<u8>),
+    FieldValue(String, Vec<u8>)
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -204,6 +205,37 @@ pub enum Bounds {
     NoteSeq(NoteSeq),
 }
 
+impl Bounds {
+    pub fn convert(&self, value: &str) -> Result<Vec<u8>> {
+        match self {
+            Bounds::Values(values) =>
+                Ok(vec![*values.get(value)
+                    .ok_or_else(|| DeviceError::UnknownValue {
+                        value_name: value.to_owned(),
+                    })?]),
+            Bounds::Range(range) => {
+                let val = usize::from_str(value)?;
+                if val >= range.lo && val <= range.hi {
+                    Ok(vec![if let Some(offset) = range.offset { (val - offset) as u8 } else { val as u8 }])
+                } else {
+                    Err(Box::new(DeviceError::ValueOutOfBound {
+                        value_name: value.to_owned(),
+                    }))
+                }
+            }
+            Bounds::NoteSeq(noteseq) => {
+                let offset = noteseq.offset.unwrap_or(0);
+                let mut notes = Vec::with_capacity(noteseq.max_len);
+                for v in value.split(",") {
+                    notes.push((MidiNote::from_str(v)?.note as i8 + offset) as u8)
+                }
+                Ok(notes)
+            }
+        }
+
+    }
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
 pub struct Range {
     pub lo: usize,
@@ -213,8 +245,8 @@ pub struct Range {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
 pub struct NoteSeq {
-    pub max_len: u8,
-    pub offset: Option<usize>,
+    pub max_len: usize,
+    pub offset: Option<i8>,
 }
 
 #[cfg(test)]

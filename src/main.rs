@@ -63,6 +63,7 @@ enum Cmd {
 }
 
 use crate::devices::CLIENT_NAME;
+use crate::schema::Bounds;
 
 fn main() -> devices::Result<()> {
     let cmd = Cmd::from_args();
@@ -79,14 +80,14 @@ fn main() -> devices::Result<()> {
             .for_each(|dev| println!("{}", dev)),
 
         Cmd::Params { device_name } => {
-            let mut dev = schema::SCHEMAS.get(&device_name)
+            let dev = schema::SCHEMAS.get(&device_name)
                 .ok_or(DeviceError::UnknownDevice { device_name })?;
             for (name, param) in dev.parameters.iter() {
                 print!("{}", name);
                 if let Some(range) = param.range {
                     print!("/{}..{}", range.lo, range.hi);
                 }
-                if let Some(modes) = param.modes {
+                if let Some(modes) = &param.modes {
                     let z: Vec<String> = modes.keys().map(|s| s.to_string()).collect();
                     print!(":[{}]", z.join("|"));
                 }
@@ -100,7 +101,7 @@ fn main() -> devices::Result<()> {
             let dev = schema::SCHEMAS.get(&device_name)
                 .ok_or(DeviceError::UnknownDevice { device_name })?;
             let param_key = dev.parse_key(&param_key)?;
-            let bounds = param_key.bounds(field_name)?;
+            let bounds: Vec<Bounds> = if let Some(field) = field_name {param_key.bounds(Some(&field))} else {param_key.bounds(None)}?;
             for bound in bounds {
                 match bound {
                     schema::Bounds::Values(values) => {
@@ -109,7 +110,7 @@ fn main() -> devices::Result<()> {
                         }
                     }
                     schema::Bounds::Range(range) => println!("[{}..{}]", range.lo, range.hi),
-                    schema::Bounds::NoteSeq(_) => println!("note1 note2 note3 ..."),
+                    schema::Bounds::NoteSeq(_) => println!("note1,note2,note3,..."),
                 }
             }
         },
