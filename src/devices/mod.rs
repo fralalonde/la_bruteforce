@@ -1,7 +1,7 @@
 use std::iter::Iterator;
 
-use midir::{MidiOutput, MidiOutputConnection};
 use midir::{MidiInput, MidiInputConnection};
+use midir::{MidiOutput, MidiOutputConnection};
 
 //mod beatstep;
 //mod microbrute;
@@ -15,11 +15,11 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::thread::sleep;
 
+use crate::schema::ParamKey;
+use crate::{devices, schema};
+use linked_hash_map::LinkedHashMap;
 use std::error::Error;
 use strum::IntoEnumIterator;
-use linked_hash_map::LinkedHashMap;
-use crate::{schema, devices};
-use crate::schema::ParamKey;
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -122,7 +122,6 @@ impl DevicePort {
         device.identify()?;
         Ok(device)
     }
-
 }
 
 pub fn output_ports(midi_client: &MidiOutput) -> Vec<MidiPort> {
@@ -136,10 +135,12 @@ pub fn output_ports(midi_client: &MidiOutput) -> Vec<MidiPort> {
 
 fn matching_input_port(midi: &MidiInput, out_port: &str) -> Option<MidiPort> {
     (0..midi.port_count())
-        .map(|number| MidiPort{ name: midi.port_name(number).unwrap(), number})
+        .map(|number| MidiPort {
+            name: midi.port_name(number).unwrap(),
+            number,
+        })
         .find(|port| port.name.eq(out_port))
 }
-
 
 pub struct SysexReceiver(MidiInputConnection<LinkedHashMap<String, Vec<String>>>);
 
@@ -164,24 +165,24 @@ pub struct Device {
 }
 
 impl Device {
-
     pub fn identify(&mut self) -> Result<()> {
         static ID_KEY: &str = "ID";
 
         let header = [
             self.schema.vendor.sysex.as_slice(),
-            self.schema.sysex.as_slice()]
-            .concat();
-        let sysex_replies =
-            self.sysex_receiver(IDENTITY_REPLY, move |msg, result| {
-                if msg.starts_with(&header) {
-                    // TODO could grab firmware version, etc. for return
-                    let _ = result.insert(ID_KEY.to_string(), vec![]);
-                } else {
-                    eprintln!("received spurious sysex {}", hex::encode(msg));
-                }
-            })?;
-        self.connection.send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
+            self.schema.sysex.as_slice(),
+        ]
+        .concat();
+        let sysex_replies = self.sysex_receiver(IDENTITY_REPLY, move |message, result| {
+            if message.starts_with(&header) {
+                // TODO could grab firmware version, etc. for return
+                let _ = result.insert(ID_KEY.to_string(), vec![]);
+            } else {
+                eprintln!("received spurious sysex {}", hex::encode(message));
+            }
+        })?;
+        self.connection
+            .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
         sysex_replies
             .close_wait(500)
             .iter()
@@ -192,7 +193,8 @@ impl Device {
     }
 
     pub fn sysex_receiver<D>(&self, match_header: &'static [u8], decode: D) -> Result<SysexReceiver>
-        where D: Fn(&[u8], &mut LinkedHashMap<String, Vec<String>>) + Send + 'static,
+    where
+        D: Fn(&[u8], &mut LinkedHashMap<String, Vec<String>>) + Send + 'static,
     {
         let midi_in = MidiInput::new(CLIENT_NAME)?;
         if let Some(in_port) = matching_input_port(&midi_in, &self.port.name) {
@@ -230,7 +232,6 @@ impl Device {
 
         Ok(())
     }
-
 }
 
 #[derive(Debug, Clone)]

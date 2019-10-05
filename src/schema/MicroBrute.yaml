@@ -7,7 +7,7 @@ vendor:
     - 0x6b
 port_prefix: MicroBrute
 sysex:
-  - 0x05
+  - 0x04
 parameters:
   Seq:
     range:
@@ -44,24 +44,31 @@ parameters:
      - 0x01
      - 0x0b
     bounds:
-      - type: Values
+      - LastNote: 0
+        LowNote: 1
+        HighNote: 2
   KeyVelocityResponse:
     sysex:
       - 0x01
       - 0x11
     bounds:
-      - type: Values
+      - Logarithmic: 0
+        Exponential: 1
+        Linear: 2
   LfoKeyRetrig:
     sysex:
       - 0x01
       - 0x0f
     bounds:
-      - type: Values
+      - Off: 0
+        On: 1
   EnvLegatoMode:
     sysex:
-      - 0x01, 0x0d,
+      - 0x01
+      - 0x0d
     bounds:
-      - type: Values
+      - Off: 0x00
+        On: 0x01
   BendRange:
     sysex:
       - 0x01
@@ -95,7 +102,8 @@ parameters:
         NoteOn: 1
   SeqKeyRetrig:
     sysex:
-      - 0x01, 0x34,
+      - 0x01
+      - 0x34
     bounds:
       - Reset: 0x00
         Legato: 0x01
@@ -122,6 +130,5 @@ parameters:
       - 0x01
       - 0x2a
     bounds:
-      - type: Values
-        Clock: 0x00
+      - Clock: 0x00
         Gate: 0x01

@@ -1,18 +1,18 @@
-
 pub type Sysex = Vec<u8>;
 
 use serde::{Deserialize, Serialize};
 
-use crate::devices::{DeviceError, Result, CLIENT_NAME, DevicePort, MidiNote};
 use crate::devices;
+use crate::devices::{DeviceError, DevicePort, MidiNote, Result, CLIENT_NAME};
+use linked_hash_map::LinkedHashMap;
 use midir::MidiOutput;
 use regex::Regex;
-use std::str::FromStr;
-use linked_hash_map::LinkedHashMap;
 use std::fmt;
+use std::str::FromStr;
 
-lazy_static!{
+lazy_static! {
     pub static ref SCHEMAS: LinkedHashMap<String, Device> = load_schemas();
+    static ref RE: Regex = Regex::new(r#"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))"#).unwrap();
 }
 
 fn load_schemas() -> LinkedHashMap<String, Device> {
@@ -42,35 +42,49 @@ pub struct Device {
 }
 
 impl Device {
-
     pub fn locate(&self) -> Result<DevicePort> {
         let client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
         Ok(devices::output_ports(&client)
             .into_iter()
             .find(|port| port.name.starts_with(&self.port_prefix))
-            .map(|port| devices::DevicePort{
+            .map(|port| devices::DevicePort {
                 schema: self.clone(),
                 client,
-                port
+                port,
             })
-            .ok_or(DeviceError::NoConnectedDevice {device_name: self.name.clone()})?)
+            .ok_or(DeviceError::NoConnectedDevice {
+                device_name: self.name.clone(),
+            })?)
     }
 
     pub fn parse_key(&self, param_key: &str) -> Result<ParamKey> {
-        let RE: Regex = Regex::new(r#"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))"#).unwrap();
-
         if let Some(cap) = RE.captures(param_key) {
-            let name = cap.name("name")
-                .ok_or(DeviceError::UnknownParameter {param_name: param_key.to_string()})?
+            let name = cap
+                .name("name")
+                .ok_or(DeviceError::UnknownParameter {
+                    param_name: param_key.to_string(),
+                })?
                 .as_str();
-            let param = self.parameters.get(name)
-                .ok_or(DeviceError::UnknownParameter {param_name: param_key.to_string()})?;
+            let param = self
+                .parameters
+                .get(name)
+                .ok_or(DeviceError::UnknownParameter {
+                    param_name: param_key.to_string(),
+                })?;
 
-            let index_val = if let Some(idx_match) = cap.name("idx") {Some(usize::from_str(idx_match.as_str())?)} else {None};
+            let index_val = if let Some(idx_match) = cap.name("idx") {
+                Some(usize::from_str(idx_match.as_str())?)
+            } else {
+                None
+            };
             let index = match (index_val, param.range) {
                 (Some(value), Some(range)) if value >= range.lo && value <= range.hi => Some(value),
                 (None, None) => None,
-                _ => return Err(Box::new(DeviceError::BadIndexParameter{param_name: param_key.to_string()}))
+                _ => {
+                    return Err(Box::new(DeviceError::BadIndexParameter {
+                        param_name: param_key.to_string(),
+                    }))
+                }
             };
 
             let mode = match (cap.name("mode"), &param.modes) {
@@ -78,11 +92,17 @@ impl Device {
                     if let Some(mode) = modes.get(mode_str.as_str()) {
                         Some(mode.clone())
                     } else {
-                        return Err(Box::new(DeviceError::BadModeParameter{param_name: param_key.to_string()}))
+                        return Err(Box::new(DeviceError::BadModeParameter {
+                            param_name: param_key.to_string(),
+                        }));
                     }
-                },
+                }
                 (None, None) => None,
-                _ => return Err(Box::new(DeviceError::BadModeParameter{param_name: param_key.to_string()}))
+                _ => {
+                    return Err(Box::new(DeviceError::BadModeParameter {
+                        param_name: param_key.to_string(),
+                    }))
+                }
             };
 
             Ok(ParamKey {
@@ -92,10 +112,11 @@ impl Device {
                 mode,
             })
         } else {
-            Err(Box::new(DeviceError::UnknownParameter{param_name: param_key.to_string()}))
+            Err(Box::new(DeviceError::UnknownParameter {
+                param_name: param_key.to_string(),
+            }))
         }
     }
-
 }
 
 pub struct ParamKey {
@@ -121,11 +142,23 @@ impl fmt::Display for ParamKey {
 impl ParamKey {
     pub fn bounds(&self, field_name: Option<&str>) -> Result<Vec<Bounds>> {
         match (self, field_name) {
-            (ParamKey{ mode: Some(mode), .. }, Some(field_name)) =>
-                Ok(mode.fields.get(field_name)
-                    .ok_or(DeviceError::BadField { field_name: field_name.to_string() })?.bounds.clone()),
-            (_, None) => Ok(self.param.bounds.clone().ok_or(DeviceError::BadSchema { field_name: self.name.clone() })?),
-            _ => Err(Box::new(DeviceError::NoBounds))
+            (
+                ParamKey {
+                    mode: Some(mode), ..
+                },
+                Some(field_name),
+            ) => Ok(mode
+                .fields
+                .get(field_name)
+                .ok_or(DeviceError::BadField {
+                    field_name: field_name.to_string(),
+                })?
+                .bounds
+                .clone()),
+            (_, None) => Ok(self.param.bounds.clone().ok_or(DeviceError::BadSchema {
+                field_name: self.name.clone(),
+            })?),
+            _ => Err(Box::new(DeviceError::NoBounds)),
         }
     }
 
@@ -142,24 +175,25 @@ impl ParamKey {
                         return Ok(Value::FieldValue(field_name.to_string(), v));
                     }
                 }
-            },
+            }
             ([value], None) => {
                 for b in self.bounds(None)? {
                     if let Ok(v) = b.convert(value) {
-                        return Ok(Value::ParamValue(v))
+                        return Ok(Value::ParamValue(v));
                     }
                 }
-            },
+            }
             _ => {}
         }
-        Err(Box::new(DeviceError::ValueOutOfBound {value_name: value.to_string()}))
+        Err(Box::new(DeviceError::ValueOutOfBound {
+            value_name: value.to_string(),
+        }))
     }
-
 }
 
 pub enum Value {
     ParamValue(Vec<u8>),
-    FieldValue(String, Vec<u8>)
+    FieldValue(String, Vec<u8>),
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -208,15 +242,19 @@ pub enum Bounds {
 impl Bounds {
     pub fn convert(&self, value: &str) -> Result<Vec<u8>> {
         match self {
-            Bounds::Values(values) =>
-                Ok(vec![*values.get(value)
-                    .ok_or_else(|| DeviceError::UnknownValue {
-                        value_name: value.to_owned(),
-                    })?]),
+            Bounds::Values(values) => Ok(vec![*values.get(value).ok_or_else(|| {
+                DeviceError::UnknownValue {
+                    value_name: value.to_owned(),
+                }
+            })?]),
             Bounds::Range(range) => {
                 let val = usize::from_str(value)?;
                 if val >= range.lo && val <= range.hi {
-                    Ok(vec![if let Some(offset) = range.offset { (val - offset) as u8 } else { val as u8 }])
+                    Ok(vec![if let Some(offset) = range.offset {
+                        (val - offset) as u8
+                    } else {
+                        val as u8
+                    }])
                 } else {
                     Err(Box::new(DeviceError::ValueOutOfBound {
                         value_name: value.to_owned(),
@@ -232,7 +270,6 @@ impl Bounds {
                 Ok(notes)
             }
         }
-
     }
 }
 
