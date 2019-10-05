@@ -1,54 +1,49 @@
 name: BeatStep
 vendor:
   name: Arturia
-  sysex:
-    - 0x00
-    - 0x20
-    - 0x6b
+  sysex: [0x00, 0x20, 0x6b]
 port_prefix: Arturia BeatStep
-sysex:
-  - 0x7f
-parameter:
+sysex: [0x01, 0x7f]
+parameters:
   Knob:
-    index: 1..16
+    sysex: [0x00]
+    range:
+      lo: 1
+      hi: 16
+      offset: 1
     modes:
       Off:
-        sysex: 0x00
+        sysex: [0x00]
+        fields: {}
       CC:
-        sysex:
-          - 0x01
+        sysex: [0x01]
         fields:
           CCNum:
-            sysex:
-              - 0x45
+            sysex: [0x45]
             bounds:
               - lo: 0
                 hi: 127
           Min:
-            sysex:
-              - 0x45
+            sysex: [0x45]
             bounds:
               - lo: 0
                 hi: 127
           Max:
-            sysex:
-              - 0x45
+            sysex: []
             bounds:
               - lo: 0
                 hi: 127
           Channel:
-            sysex:
-              - 0x45
+            sysex: []
             bounds:
               - lo: 1
                 hi: 16
                 offset: 1
               - Global: 0x10
           Option:
-            sysex:
-              - 0x45
+            sysex: []
             bounds:
-              Absolute: 0x00
-              Relative1: 0x01
-              Relative2: 0x02
-              Relative3: 0x03
+              - Absolute: 0x00
+                Relative1: 0x01
+                Relative2: 0x02
+                Relative3: 0x03

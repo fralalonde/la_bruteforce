@@ -6,18 +6,18 @@ use crate::devices;
 use crate::devices::{DeviceError, DevicePort, MidiNote, Result, CLIENT_NAME};
 use linked_hash_map::LinkedHashMap;
 use midir::MidiOutput;
-use regex::Regex;
 use std::fmt;
 use std::str::FromStr;
 
 lazy_static! {
     pub static ref SCHEMAS: LinkedHashMap<String, Device> = load_schemas();
-    static ref RE: Regex = Regex::new(r#"(?P<name>.+)(:?/(?P<idx>\d+))(?::(?P<mode>.+))"#).unwrap();
 }
 
 fn load_schemas() -> LinkedHashMap<String, Device> {
     let mut map = LinkedHashMap::new();
-    let dev = parse_schema(include_str!("MicroBrute.yaml")).unwrap();
+    let dev = parse_schema(include_str!("MicroBrute.yaml")).expect("MicroBrute");
+    map.insert(dev.name.clone(), dev);
+    let dev = parse_schema(include_str!("BeatStep.yaml")).expect("BeatStep");
     map.insert(dev.name.clone(), dev);
     map
 }
@@ -58,64 +58,80 @@ impl Device {
     }
 
     pub fn parse_key(&self, param_key: &str) -> Result<ParamKey> {
-        if let Some(cap) = RE.captures(param_key) {
-            let name = cap
-                .name("name")
-                .ok_or(DeviceError::UnknownParameter {
-                    param_name: param_key.to_string(),
-                })?
-                .as_str();
-            let param = self
-                .parameters
-                .get(name)
-                .ok_or(DeviceError::UnknownParameter {
-                    param_name: param_key.to_string(),
-                })?;
+        let seq_parts: Vec<&str> = param_key.split("/").collect();
+        let name: &str = seq_parts.get(0).ok_or("Empty param key")?;
+        let mut mode_parts: Vec<&str> = param_key.split(":").collect();
+        let (index, mode) =  match (seq_parts.len(), mode_parts.len()) {
+            (1, 1) => (None, None),
+            (2, 1) => (seq_parts.get(1), None),
+            (1, 2) => (None, mode_parts.get(1)),
+            (2, 2) => {
+                // i.e. "Seq/3:Mode" : re-split "3" from "Mode"
+                mode_parts = seq_parts.get(1).unwrap().split(":").collect();
+                (mode_parts.get(0), mode_parts.get(1))
+            },
+            _ => Err(DeviceError::UnknownParameter {
+                param_name: param_key.to_string(),
+            })?
+        };
+        let param = self
+            .parameters
+            .get(name)
+            .ok_or(DeviceError::UnknownParameter {
+                param_name: param_key.to_string(),
+            })?;
 
-            let index_val = if let Some(idx_match) = cap.name("idx") {
-                Some(usize::from_str(idx_match.as_str())?)
-            } else {
-                None
-            };
-            let index = match (index_val, param.range) {
-                (Some(value), Some(range)) if value >= range.lo && value <= range.hi => Some(value),
-                (None, None) => None,
-                _ => {
-                    return Err(Box::new(DeviceError::BadIndexParameter {
-                        param_name: param_key.to_string(),
-                    }))
-                }
-            };
+        let index_val = if let Some(idx_match) = index {
+            Some(usize::from_str(*idx_match)?)
+        } else {
+            None
+        };
+        let index = match (index_val, param.range) {
+            (Some(value), Some(range)) if value >= range.lo && value <= range.hi => Some(value),
+            (None, None) => None,
+            _ => {
+                return Err(Box::new(DeviceError::BadIndexParameter {
+                    param_name: param_key.to_string(),
+                }))
+            }
+        };
 
-            let mode = match (cap.name("mode"), &param.modes) {
-                (Some(mode_str), Some(modes)) => {
-                    if let Some(mode) = modes.get(mode_str.as_str()) {
-                        Some(mode.clone())
-                    } else {
-                        return Err(Box::new(DeviceError::BadModeParameter {
-                            param_name: param_key.to_string(),
-                        }));
-                    }
-                }
-                (None, None) => None,
-                _ => {
+        let mode = match (mode, &param.modes) {
+            (Some(mode_str), Some(modes)) => {
+                if let Some(mode) = modes.get(*mode_str) {
+                    Some(mode.clone())
+                } else {
                     return Err(Box::new(DeviceError::BadModeParameter {
                         param_name: param_key.to_string(),
-                    }))
+                    }));
                 }
-            };
+            }
+            (None, None) => None,
+            _ => {
+                return Err(Box::new(DeviceError::BadModeParameter {
+                    param_name: param_key.to_string(),
+                }))
+            }
+        };
 
-            Ok(ParamKey {
-                param: param.clone(),
-                name: name.to_string(),
-                index,
-                mode,
-            })
-        } else {
-            Err(Box::new(DeviceError::UnknownParameter {
-                param_name: param_key.to_string(),
-            }))
+        Ok(ParamKey {
+            param: param.clone(),
+            name: name.to_string(),
+            index,
+            mode,
+        })
+    }
+
+    pub fn parse_msg(&self, msg: &[u8]) -> Result<ParamKey> {
+        for p in self.parameters {
+            if p.1.sysex.eq(&msg[2..3]) {
+                match p.1 {
+                    Seq(_) => return Some(Seq(msg[4])),
+                    _ => return Some(p),
+                }
+            }
         }
+        None
     }
 }
 
@@ -206,14 +222,17 @@ pub struct Parameter {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Mode {
-    pub name: String,
     pub sysex: Sysex,
     pub fields: Fields,
 }
 
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Ok(f.write_str(&self.name)?)
+        f.write_str("{")?;
+        for z in &self.fields {
+            f.write_fmt(format_args!("{}", z.0))?;
+        }
+        Ok(f.write_str("}")?)
     }
 }
 

@@ -178,7 +178,7 @@ impl Device {
                 // TODO could grab firmware version, etc. for return
                 let _ = result.insert(ID_KEY.to_string(), vec![]);
             } else {
-                eprintln!("received spurious sysex {}", hex::encode(message));
+                eprintln!("received spurious sysex {}, filtering on {}", hex::encode(message), hex::encode(&header));
             }
         })?;
         self.connection
@@ -220,7 +220,38 @@ impl Device {
     }
 
     pub fn query(&mut self, params: &ParamKey) -> Result<Vec<String>> {
-        Ok(vec![])
+        let header = [
+            self.schema.vendor.sysex.as_slice(),
+            self.schema.sysex.as_slice(),
+        ]
+        .concat();
+
+        let sysex_replies = self.sysex_receiver(header, |message, result| {
+
+        })?;
+        match param.index() {
+            Some(idx) => {
+                //0x01 MSGID(u8) 0x03,0x3b(SEQ) SEQ_IDX(u8 0 - 7) 0x00 SEQ_OFFSET(u8) SEQ_LEN(0x20)
+                self.midi_connection.send(&sysex(
+                    MICROBRUTE,
+                    &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x00, 0x20]],
+                ))?;
+                self.msg_id += 1;
+                self.midi_connection.send(&sysex(
+                    MICROBRUTE,
+                    &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x20, 0x20]],
+                ))?;
+                self.msg_id += 1;
+            }
+            None => {
+                self.midi_connection.send(&sysex(
+                    MICROBRUTE,
+                    &[&[0x01, self.msg_id as u8], query_code],
+                ))?;
+                self.msg_id += 1;
+            }
+        }
+        Ok(sysex_replies.close_wait(500))
     }
 
     pub fn update(&mut self, param: &ParamKey, value_ids: &[String]) -> Result<()> {
@@ -232,6 +263,40 @@ impl Device {
 
         Ok(())
     }
+}
+
+fn decode(schema: schema::Device, msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
+    let param = schema.parse_msg(msg);
+    if let Some(param) = into_param(msg) {
+        match param {
+            NoteSeq(_idx) => {
+                let notes = result_map.entry(param.to_string()).or_insert(vec![]);
+                for nval in &msg[7..] {
+                    if *nval == 0 {
+                        break;
+                    }
+                    if *nval == REST_NOTE {
+                        notes.push("_".to_string());
+                    } else if *nval < 24 {
+                        notes.push(format!("?{}", *nval));
+                    } else {
+                        notes.push(MidiNote { note: *nval - 24 }.to_string());
+                    }
+                }
+            }
+            param => {
+                if let Some(bound) = devices::bound_str(bounds(param), &[msg[4]]) {
+                    let _ = result_map.insert(param.to_string(), vec![bound]);
+                } else {
+                    eprintln!(
+                        "param {} unbound value code '{}'",
+                        param.to_string(),
+                        msg[4]
+                    );
+                }
+            }
+        }
+    };
 }
 
 #[derive(Debug, Clone)]

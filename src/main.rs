@@ -85,12 +85,13 @@ fn main() -> devices::Result<()> {
             for (name, param) in dev.parameters.iter() {
                 print!("{}", name);
                 if let Some(range) = param.range {
-                    print!("/{}..{}", range.lo, range.hi);
+                    print!("/[{}..{}]", range.lo, range.hi);
                 }
                 if let Some(modes) = &param.modes {
                     let z: Vec<String> = modes.keys().map(|s| s.to_string()).collect();
                     print!(":[{}]", z.join("|"));
                 }
+                println!()
             }
         }
         Cmd::Bounds {
