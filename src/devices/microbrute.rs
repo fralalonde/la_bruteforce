@@ -1,11 +1,11 @@
-use crate::devices::Bounds::*;
-use crate::devices::CLIENT_NAME;
-use crate::devices::{self, MidiPort};
-use crate::devices::{sysex, DeviceError, MidiNote, ARTURIA, IDENTITY_REPLY};
-use crate::devices::{Bounds, Descriptor, Device};
+use crate::device::Bounds::*;
+use crate::device::CLIENT_NAME;
+use crate::device::{self, MidiPort};
+use crate::device::{sysex, DeviceError, MidiNote, ARTURIA, IDENTITY_REPLY};
+use crate::device::{Bounds, Descriptor, Device};
 use crate::schema;
 
-use devices::Result;
+use device::Result;
 use hex;
 use midir::{MidiOutput, MidiOutputConnection};
 use std::fmt;
@@ -49,7 +49,7 @@ pub struct MicroBruteDevice {
     msg_id: usize,
 }
 
-impl MicroBruteDevice {z
+impl MicroBruteDevice {
     /// from CLI
     fn parse(&self, param_str: &str) -> Result<Parameter> {
         let re = Regex::new(r"(?P<name>.+)(:?/(?P<seq>\d+))(?::(?P<mode>.+))")?;
@@ -94,7 +94,7 @@ impl MicroBruteDevice {z
 
 impl Device for MicroBruteDevice {
     fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE, decode)?;
+        let sysex_replies = device::sysex_query_init(&self.port_name, MICROBRUTE, decode)?;
         for param_str in params {
             let param = MicrobruteGlobals::parse(param_str)?;
             let query_code = &param.sysex_query_code();
@@ -128,7 +128,7 @@ impl Device for MicroBruteDevice {
         let param = MicrobruteGlobals::parse(param_str)?;
         let bounds = bounds(param);
         let reqs = bound_reqs(param);
-        let mut bcodes = devices::bound_codes(bounds, value_ids, reqs)?;
+        let mut bcodes = device::bound_codes(bounds, value_ids, reqs)?;
         match param {
             Seq(seq_idx) => {
                 // 0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
@@ -199,7 +199,7 @@ fn decode(msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
                 }
             }
             param => {
-                if let Some(bound) = devices::bound_str(bounds(param), &[msg[4]]) {
+                if let Some(bound) = device::bound_str(bounds(param), &[msg[4]]) {
                     let _ = result_map.insert(param.to_string(), vec![bound]);
                 } else {
                     eprintln!(

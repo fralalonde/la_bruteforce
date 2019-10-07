@@ -3,7 +3,7 @@ pub type Sysex = Vec<u8>;
 use serde::{Deserialize, Serialize};
 
 use crate::devices;
-use crate::devices::{DeviceError, DevicePort, MidiNote, Result, CLIENT_NAME};
+use crate::device::{DeviceError, DevicePort, MidiNote, Result, CLIENT_NAME};
 use linked_hash_map::LinkedHashMap;
 use midir::MidiOutput;
 use std::fmt;
@@ -44,10 +44,10 @@ pub struct Device {
 impl Device {
     pub fn locate(&self) -> Result<DevicePort> {
         let client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
-        Ok(devices::output_ports(&client)
+        Ok(device::output_ports(&client)
             .into_iter()
             .find(|port| port.name.starts_with(&self.port_prefix))
-            .map(|port| devices::DevicePort {
+            .map(|port| device::DevicePort {
                 schema: self.clone(),
                 client,
                 port,
@@ -57,7 +57,7 @@ impl Device {
             })?)
     }
 
-    pub fn parse_key(&self, param_key: &str) -> Result<ParamKey> {
+    pub fn parse_key(&self, param_key: &str) -> Result<QueryKey> {
         let seq_parts: Vec<&str> = param_key.split("/").collect();
         let name: &str = seq_parts.get(0).ok_or("Empty param key")?;
         let mut mode_parts: Vec<&str> = param_key.split(":").collect();
@@ -114,52 +114,38 @@ impl Device {
             }
         };
 
-        Ok(ParamKey {
-            param: param.clone(),
+        Ok(QueryKey {
             name: name.to_string(),
+            param: param.clone(),
             index,
             mode,
         })
     }
 
-    pub fn parse_msg(&self, msg: &[u8]) -> Result<ParamKey> {
+    pub fn parse_msg_key(&self, msg: &[u8]) -> Result<QueryKey> {
+        let pcode = &msg[2..3];
         for p in self.parameters {
-            if p.1.sysex.eq(&msg[2..3]) {
-                match p.1 {
-                    Seq(_) => return Some(Seq(msg[4])),
-                    _ => return Some(p),
-                }
+            if p.1.sysex.eq(pcode) {
+                return Ok(QueryKey {
+                    name: p.0.clone(),
+                    param: p.1,
+                    index: if p.1.range.is_some() { Some(msg[4] as usize) } else { None },
+                    mode: p.1.find_mode(msg)
+                })
             }
         }
-        None
+        Err(DeviceError::UnknownParameterCode { code: hex::encode(pcode) })?
     }
 }
 
-pub struct ParamKey {
-    pub name: String,
-    pub param: Parameter,
-    pub index: Option<usize>,
-    pub mode: Option<Mode>,
-}
 
-impl fmt::Display for ParamKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.name)?;
-        if let Some(index) = &self.index {
-            f.write_fmt(format_args!("/{}", index))?;
-        }
-        if let Some(mode) = &self.mode {
-            f.write_fmt(format_args!(":{}", mode))?;
-        }
-        Ok(())
-    }
-}
 
-impl ParamKey {
+
+impl QueryKey {
     pub fn bounds(&self, field_name: Option<&str>) -> Result<Vec<Bounds>> {
         match (self, field_name) {
             (
-                ParamKey {
+                QueryKey {
                     mode: Some(mode), ..
                 },
                 Some(field_name),
@@ -220,10 +206,36 @@ pub struct Parameter {
     pub modes: Option<LinkedHashMap<String, Mode>>,
 }
 
+impl Parameter {
+    pub fn find_mode(&self, msg: &[u8]) -> Result<Option<Mode>> {
+        if let Some(modes) = &self.modes {
+            for m in modes {
+                if m.1.sysex.eq(&msg[6..7]) {
+                    return Ok(Some(m.1.clone()))
+                }
+            }
+            Err(DeviceError::UnknownParameterCode { code: hex::encode(pcode) })?
+        }
+        None
+    }
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Mode {
     pub sysex: Sysex,
     pub fields: Fields,
+}
+
+impl Mode {
+    pub fn find_field(&self, msg: &[u8]) -> Result<Field> {
+        let mcode = &msg[8..10];
+        for f in &self.fields {
+            if m.1.sysex.eq(mcode) {
+                return Ok(m.1.clone())
+            }
+        }
+        Err(DeviceError::UnknownModeCode { code: hex::encode(pcode) })?
+    }
 }
 
 impl fmt::Display for Mode {
@@ -240,13 +252,14 @@ pub type Fields = LinkedHashMap<String, Field>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Field {
+    pub name: String,
     pub sysex: Sysex,
     pub bounds: Vec<Bounds>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 //#[serde(tag = "type")] /*maybe we can get away without*/
-#[serde(untagged)]
+#[serde(internal)]
 pub enum Bounds {
     /// Name / Value pair
     Values(LinkedHashMap<String, u8>),
@@ -255,7 +268,7 @@ pub enum Bounds {
     Range(Range),
 
     /// Sequence of notes with offset from std MIDI note value
-    NoteSeq(NoteSeq),
+    MidiNotes(NoteSeq),
 }
 
 impl Bounds {

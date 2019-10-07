@@ -1,58 +1,77 @@
 name: MicroBrute
-vendor:
-  name: Arturia
-  sysex: [0x00, 0x20, 0x6b]
+vendor: Arturia
 port_prefix: MicroBrute
-sysex: [0x04]
+message:
+  vendor:
+    sysex: [0x00, 0x20, 0x6b]
+    start: 4
+  device:
+    sysex: [0x04]
+    start: 4
+  parameter:
+    start: 8
+#  microbrute params dont have fields
+#  field:
+#    offset: 6
+  value:
+    start: 9
 parameters:
   Seq:
+    sysex: [0x23, 0x3a]
     range:
       lo: 1
       hi: 8
       offset: 1
-    sysex: [0x23, 0x3a]
     bounds:
-      - max_len: 64
+      - type: NoteSeq
+        max_len: 64
         offset: 24
   MidiRxChan:
     sysex: [0x01, 0x05]
     bounds:
-      - lo: 1
+      - type: Range
+        lo: 1
         hi: 16
         offset: 1
       - All: 0x10
   MidiTxChan:
     sysex: [0x01, 0x07]
     bounds:
+      - type: Range
       - lo: 1
         hi: 16
         offset: 1
   KeyNotePriority:
     sysex: [0x01, 0x0b]
     bounds:
-      - LastNote: 0
+      - type: Values
+        LastNote: 0
         LowNote: 1
         HighNote: 2
   KeyVelocityResponse:
     sysex: [0x01, 0x11]
     bounds:
-      - Logarithmic: 0
+      - type: Values
+        Logarithmic: 0
         Exponential: 1
         Linear: 2
   LfoKeyRetrig:
     sysex: [0x01, 0x0f]
     bounds:
-      - Off: 0
+      - type: Values
+        Off: 0
         On: 1
   EnvLegatoMode:
     sysex: [0x01, 0x0d]
     bounds:
-      - Off: 0x00
+      - type: Values
+        Off: 0x00
         On: 0x01
   BendRange:
     sysex: [0x01, 0x2c]
     bounds:
-      - lo: 1
+      - type: Range
+        lo: 1
         hi: 12
         offset: 1
   Gate:
@@ -64,35 +83,41 @@ parameters:
   Sync:
     sysex: [0x01, 0x3c]
     bounds:
-      - Auto: 0
+      - type: Values
+        Auto: 0
         Internal: 1
         External: 2
   SeqPlay:
     sysex: [0x01, 0x2e]
     bounds:
-      - Hold: 0
+      - type: Values
+        Hold: 0
         NoteOn: 1
   SeqKeyRetrig:
     sysex: [0x01, 0x34]
     bounds:
-      - Reset: 0x00
+      - type: Values
+        Reset: 0x00
         Legato: 0x01
         None: 0x02
   SeqNextSeq:
     sysex: [0x01, 0x32]
     bounds:
-      - End: 0x00
+      - type: Values
+        End: 0x00
         Reset: 0x01
         Continue: 0x02
   SeqStep:
     sysex: [0x01, 0x38]
     bounds:
-      - 1/4: 0x04
+      - type: Values
+        1/4: 0x04
         1/8: 0x08
         1/16: 0x10
         1/32: 0x20
   SeqStepOn:
     sysex: [0x01, 0x2a]
     bounds:
-      - Clock: 0x00
+      - type: Values
+        Clock: 0x00
         Gate: 0x01

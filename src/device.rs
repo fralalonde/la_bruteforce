@@ -15,7 +15,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::thread::sleep;
 
-use crate::schema::ParamKey;
+use crate::schema::{QueryKey, Mode, Field, Parameter};
 use crate::{devices, schema};
 use linked_hash_map::LinkedHashMap;
 use std::error::Error;
@@ -111,7 +111,7 @@ pub struct DevicePort {
 }
 
 impl DevicePort {
-    pub fn connect(self) -> Result<devices::Device> {
+    pub fn connect(self) -> Result<device::Device> {
         let connection = self.client.connect(self.port.number, &self.port.name)?;
         let mut device = Device {
             schema: self.schema,
@@ -219,42 +219,40 @@ impl Device {
         }
     }
 
-    pub fn query(&mut self, params: &ParamKey) -> Result<Vec<String>> {
+    pub fn query(&mut self, params: &QueryKey) -> Result<LinkedHashMap<String, Vec<String>>> {
         let header = [
             self.schema.vendor.sysex.as_slice(),
             self.schema.sysex.as_slice(),
         ]
         .concat();
 
-        let sysex_replies = self.sysex_receiver(header, |message, result| {
-
-        })?;
-        match param.index() {
-            Some(idx) => {
-                //0x01 MSGID(u8) 0x03,0x3b(SEQ) SEQ_IDX(u8 0 - 7) 0x00 SEQ_OFFSET(u8) SEQ_LEN(0x20)
-                self.midi_connection.send(&sysex(
-                    MICROBRUTE,
-                    &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x00, 0x20]],
-                ))?;
-                self.msg_id += 1;
-                self.midi_connection.send(&sysex(
-                    MICROBRUTE,
-                    &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x20, 0x20]],
-                ))?;
-                self.msg_id += 1;
-            }
-            None => {
-                self.midi_connection.send(&sysex(
-                    MICROBRUTE,
-                    &[&[0x01, self.msg_id as u8], query_code],
-                ))?;
-                self.msg_id += 1;
-            }
-        }
+        let sysex_replies = self.sysex_receiver(header, decode)?;
+//        match param.index() {
+//            Some(idx) => {
+//                //0x01 MSGID(u8) 0x03,0x3b(SEQ) SEQ_IDX(u8 0 - 7) 0x00 SEQ_OFFSET(u8) SEQ_LEN(0x20)
+//                self.midi_connection.send(&sysex(
+//                    MICROBRUTE,
+//                    &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x00, 0x20]],
+//                ))?;
+//                self.msg_id += 1;
+//                self.midi_connection.send(&sysex(
+//                    MICROBRUTE,
+//                    &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x20, 0x20]],
+//                ))?;
+//                self.msg_id += 1;
+//            }
+//            None => {
+//                self.midi_connection.send(&sysex(
+//                    MICROBRUTE,
+//                    &[&[0x01, self.msg_id as u8], query_code],
+//                ))?;
+//                self.msg_id += 1;
+//            }
+//        }
         Ok(sysex_replies.close_wait(500))
     }
 
-    pub fn update(&mut self, param: &ParamKey, value_ids: &[String]) -> Result<()> {
+    pub fn update(&mut self, param: &QueryKey, value_ids: &[String]) -> Result<()> {
         // convert values by mode?>field?>bounds
 
         // check that all fields filled out
@@ -265,27 +263,22 @@ impl Device {
     }
 }
 
+
 fn decode(schema: schema::Device, msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
-    let param = schema.parse_msg(msg);
-    if let Some(param) = into_param(msg) {
-        match param {
-            NoteSeq(_idx) => {
-                let notes = result_map.entry(param.to_string()).or_insert(vec![]);
-                for nval in &msg[7..] {
-                    if *nval == 0 {
-                        break;
-                    }
-                    if *nval == REST_NOTE {
-                        notes.push("_".to_string());
-                    } else if *nval < 24 {
-                        notes.push(format!("?{}", *nval));
-                    } else {
-                        notes.push(MidiNote { note: *nval - 24 }.to_string());
-                    }
-                }
-            }
+    let param_key = schema.parse_msg_key(msg)?;
+    let (field, bounds) = match param_key {
+        QueryKey { param, mode: None, .. } => (None, &param.bounds),
+        QueryKey { param, mode: Some(mode), .. } => {
+            let field = mode.find_field(msg)?;
+            (Some(field), &field.bounds)
+        }
+    };
+
+    // insert value or field values for param...
+    for b in bound {
+        match b {
             param => {
-                if let Some(bound) = devices::bound_str(bounds(param), &[msg[4]]) {
+                if let Some(bound) = device::bound_str(bounds(param), &[msg[4]]) {
                     let _ = result_map.insert(param.to_string(), vec![bound]);
                 } else {
                     eprintln!(
@@ -295,8 +288,26 @@ fn decode(schema: schema::Device, msg: &[u8], result_map: &mut LinkedHashMap<Str
                     );
                 }
             }
+
         }
-    };
+    }
+    match (field, bounds) {
+        NoteSeq(_idx) => {
+            let notes = result_map.entry(param_key.to_string()).or_insert(vec![]);
+            for nval in &msg[7..] {
+                if *nval == 0 {
+                    break;
+                }
+                if *nval == REST_NOTE {
+                    notes.push("_".to_string());
+                } else if *nval < 24 {
+                    notes.push(format!("?{}", *nval));
+                } else {
+                    notes.push(MidiNote { note: *nval - 24 }.to_string());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -318,6 +329,9 @@ pub enum DeviceError {
     },
     UnknownParameter {
         param_name: String,
+    },
+    UnknownParameterCode {
+        code: String,
     },
     BadFormatParameter {
         param_name: String,

@@ -5,14 +5,16 @@ extern crate strum_macros;
 #[macro_use]
 extern crate lazy_static;
 
-mod devices;
+mod elements;
+mod device;
+mod action;
 mod schema;
 
 use midir::MidiOutput;
 use structopt::StructOpt;
 use strum::IntoEnumIterator;
 
-use crate::devices::DeviceError;
+use crate::device::DeviceError;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -62,16 +64,16 @@ enum Cmd {
     },
 }
 
-use crate::devices::CLIENT_NAME;
+use crate::device::CLIENT_NAME;
 use crate::schema::Bounds;
 
-fn main() -> devices::Result<()> {
+fn main() -> device::Result<()> {
     let cmd = Cmd::from_args();
 
     match cmd {
         Cmd::Ports => {
             let midi_client = MidiOutput::new(CLIENT_NAME)?;
-            devices::output_ports(&midi_client)
+            device::output_ports(&midi_client)
                 .iter()
                 .for_each(|port| println!("{}", port.name))
         }
@@ -136,7 +138,7 @@ fn main() -> devices::Result<()> {
             device_name,
             mut param_keys,
         } => {
-            let dev = schema::SCHEMAS
+            let dev: &'static schema::Device = schema::SCHEMAS
                 .get(&device_name)
                 .ok_or(DeviceError::UnknownDevice { device_name })?;
             if param_keys.is_empty() {

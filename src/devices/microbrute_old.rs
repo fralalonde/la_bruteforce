@@ -1,11 +1,11 @@
 use self::MicrobruteGlobals::*;
-use crate::devices::Bounds::*;
-use crate::devices::CLIENT_NAME;
-use crate::devices::{self, MidiPort};
-use crate::devices::{sysex, DeviceError, MidiNote, Parameter, ARTURIA, IDENTITY_REPLY};
-use crate::devices::{Bounds, Descriptor, Device};
+use crate::device::Bounds::*;
+use crate::device::CLIENT_NAME;
+use crate::device::{self, MidiPort};
+use crate::device::{sysex, DeviceError, MidiNote, Parameter, ARTURIA, IDENTITY_REPLY};
+use crate::device::{Bounds, Descriptor, Device};
 
-use devices::Result;
+use device::Result;
 use hex;
 use midir::{MidiOutput, MidiOutputConnection};
 use std::fmt;
@@ -138,7 +138,7 @@ impl Descriptor for MicroBruteDescriptor {
 
     fn ports(&self) -> Vec<MidiPort> {
         let midi_client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
-        devices::output_ports(&midi_client)
+        device::output_ports(&midi_client)
             .into_iter()
             .filter_map(|port| {
                 if port.name.starts_with("MicroBrute") {
@@ -207,7 +207,7 @@ impl MicroBruteDevice {
     fn identify(&mut self) -> Result<()> {
         static ID_KEY: &str = "ID";
         let sysex_replies =
-            devices::sysex_query_init(&self.port_name, IDENTITY_REPLY, |msg, result| {
+            device::sysex_query_init(&self.port_name, IDENTITY_REPLY, |msg, result| {
                 if msg.starts_with(ARTURIA) {
                     // TODO could grab firmware version
                     let _ = result.insert(ID_KEY.to_string(), vec![]);
@@ -230,7 +230,7 @@ impl MicroBruteDevice {
 
 impl Device for MicroBruteDevice {
     fn query(&mut self, params: &[String]) -> Result<LinkedHashMap<String, Vec<String>>> {
-        let sysex_replies = devices::sysex_query_init(&self.port_name, MICROBRUTE, decode)?;
+        let sysex_replies = device::sysex_query_init(&self.port_name, MICROBRUTE, decode)?;
         for param_str in params {
             let param = MicrobruteGlobals::parse(param_str)?;
             let query_code = &param.sysex_query_code();
@@ -264,7 +264,7 @@ impl Device for MicroBruteDevice {
         let param = MicrobruteGlobals::parse(param_str)?;
         let bounds = bounds(param);
         let reqs = bound_reqs(param);
-        let mut bcodes = devices::bound_codes(bounds, value_ids, reqs)?;
+        let mut bcodes = device::bound_codes(bounds, value_ids, reqs)?;
         match param {
             Seq(seq_idx) => {
                 // 0x01 MSGID(u8) SEQ(0x23, 0x3a) SEQ_ID(u8) SEQ_OFFSET(u8) SEQ_LEN(u8, max 0x20) SEQ_NOTES([u8; 32] 0 padded, start@ C0=0x30, C#0 0x31... rest=0x7f)
@@ -335,7 +335,7 @@ fn decode(msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
                 }
             }
             param => {
-                if let Some(bound) = devices::bound_str(bounds(param), &[msg[4]]) {
+                if let Some(bound) = device::bound_str(bounds(param), &[msg[4]]) {
                     let _ = result_map.insert(param.to_string(), vec![bound]);
                 } else {
                     eprintln!(
