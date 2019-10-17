@@ -4,6 +4,21 @@ vendor:
   sysex: [0x00, 0x20, 0x6b]
 port_prefix: MicroBrute
 sysex: [0x04]
+classes:
+  Control:
+    out:
+      offset:
+      length:
+    in:
+      offset:
+      length:
+  Parameter:
+    offset: 8
+    length: 1
+  Value:
+    offset: 8
+    length: 1
+
 parameters:
   Seq:
     range:

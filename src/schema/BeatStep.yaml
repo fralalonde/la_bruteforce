@@ -12,38 +12,44 @@ parameters:
       hi: 16
       offset: 1
     modes:
-      Off:
+      Off: []
+      CC: [CCNum, Channel, Option, Min, Max]
+      RPN: [Option, Channel, MSB, LSB]
+    fields:
+      Mode:
         sysex: [0x00]
-        fields: {}
-      CC:
-        sysex: [0x01]
-        fields:
-          CCNum:
-            sysex: [0x45]
-            bounds:
-              - lo: 0
-                hi: 127
-          Min:
-            sysex: [0x45]
-            bounds:
-              - lo: 0
-                hi: 127
-          Max:
-            sysex: []
-            bounds:
-              - lo: 0
-                hi: 127
-          Channel:
-            sysex: []
-            bounds:
-              - lo: 1
-                hi: 16
-                offset: 1
-              - Global: 0x10
-          Option:
-            sysex: []
-            bounds:
-              - Absolute: 0x00
-                Relative1: 0x01
-                Relative2: 0x02
-                Relative3: 0x03
+        modes: true
+        bounds:
+          - Off: 0x00
+            CC: 0x01
+            RPN: 0x02
+      CCNum:
+        sysex: [0x45]
+        bounds:
+          - lo: 0
+            hi: 127
+      Min:
+        sysex: [0x45]
+        bounds:
+          - lo: 0
+            hi: 127
+      Max:
+        sysex: []
+        bounds:
+          - lo: 0
+            hi: 127
+      Channel:
+        sysex: []
+        bounds:
+          - lo: 1
+            hi: 16
+            offset: 1
+          - Global: 0x10
+      Option:
+        sysex: []
+        bounds:
+          - Absolute: 0x00
+            Relative1: 0x01
+            Relative2: 0x02
+            Relative3: 0x03
+    - RPN:

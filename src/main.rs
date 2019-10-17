@@ -7,6 +7,7 @@ extern crate lazy_static;
 
 mod devices;
 mod schema;
+mod parse;
 
 use midir::MidiOutput;
 use structopt::StructOpt;
@@ -116,7 +117,7 @@ fn main() -> devices::Result<()> {
                         }
                     }
                     schema::Bounds::Range(range) => println!("[{}..{}]", range.lo, range.hi),
-                    schema::Bounds::NoteSeq(_) => println!("note1,note2,note3,..."),
+                    schema::Bounds::MidiNotes(_) => println!("note1,note2,note3,..."),
                 }
             }
         }

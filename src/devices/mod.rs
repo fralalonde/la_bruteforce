@@ -226,9 +226,7 @@ impl Device {
         ]
         .concat();
 
-        let sysex_replies = self.sysex_receiver(header, |message, result| {
-
-        })?;
+        let sysex_replies = self.sysex_receiver(header, decode)?;
         match param.index() {
             Some(idx) => {
                 //0x01 MSGID(u8) 0x03,0x3b(SEQ) SEQ_IDX(u8 0 - 7) 0x00 SEQ_OFFSET(u8) SEQ_LEN(0x20)
