@@ -61,11 +61,51 @@ impl SysexReply {
         for v in VENDORS.iter() {
             if accept(v.sysex) {
                 self.tokens.push(Token::Vendor(v));
-                self.device(v, message)
+                return self.device(v, message);
             }
         }
-        Ok(())
+        Err(ParseError::UnknownVendor)
     }
+
+    fn device(&mut self, vendor: &schema::Vendor, message: &[u8]) -> Result<(), ParseError> {
+        for d in &vendor.devices {
+            if accept(d.sysex) {
+                self.tokens.push(Token::Device(d));
+
+                self.expect(&[0x01])?; // device sysex id?
+                self.take(1)?; // msg id, unused for now
+                self.take(1)?; // unknown, ignore (01 for regular param, 23 for sequences)
+
+                return self.control(d, message);
+            }
+        }
+        Err(ParseError::UnknownDevice)
+    }
+
+    fn control(&mut self, device: &schema::Device, message: &[u8]) -> Result<(), ParseError> {
+        if let Some(controls) = &device.controls {
+            for c in controls {
+                if accept(c.sysex) {
+                    self.tokens.push(Token::Control(c));
+                    return self.control(d, message);
+                }
+            }
+        }
+        if let Some(controls) = &device.indexed_controls {
+            for c in controls {
+                if accept(c.sysex) {
+                    let seqnum = self.take(1)?; // msg id, unused for now
+                    self.tokens.push(Token::IndexedControl(c, seqnum));
+                    return self.control(d, message);
+                }
+            }
+        }
+
+        // TODO indexed modal controls
+
+        Err(ParseError::UnknownControl)
+    }
+
 
     #[inline]
     fn select(&mut self, length: usize) -> Option<&[u8]> {
@@ -105,16 +145,6 @@ impl SysexReply {
 }
 
 
-fn arturia(parse: &mut SysexReply) -> Result<(), ParseError> {
-    parse.expect(&[0x01])?; // device sysex id?
-    parse.take(1)?; // msg id, unused for now
-    parse.take(1)?; // unknown, ignore (01 for regular param, 23 for sequences)
-    if parse.accept(MICROBRUTE) {
-        microbrute(parse)
-    } else {
-        Err(ParseError::UnknownDevice)
-    }
-}
 
 fn microbrute(parse: &mut SysexReply) -> Result<(), ParseError> {
     // 01       sysex id    @5
