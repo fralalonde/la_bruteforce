@@ -200,3 +200,32 @@ impl Bounds {
         }
     }
 }
+
+fn microbrute(parse: &mut SysexReply) -> Result<(), ParseError> {
+    // 01       sysex id    @5
+    // 0f       message id  @6
+    // 01       unknown     @7
+    // 11       control id  @8
+    // 00       value       @9
+    // 00 00 00 00 00 00 00 00 padding
+    // f7       sysex end   @18
+    if parse.accept(SEQUENCE) {
+        sequence(parse)
+    } else {
+        let control = parse.take(1)?;
+        parse.tokens.push(Control(control));
+        let value = parse.take(1)?;
+        parse.tokens.push(Value(value));
+    }
+}
+
+fn sequence(parse: &mut SysexReply) -> Result<(), ParseError> {
+    // 23 3a 00 00 20 30 3c 48 54 26 74 51 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f7
+
+    parse.tokens.push(Index(parse.take(1)?));
+    parse.take(1)?;
+    parse.tokens.push(Offset(parse.take(1)?));
+    parse.tokens.push(Length(parse.take(1)?));
+    parse.tokens.push(Sequence(parse.take(32)?));
+    Ok(())
+}

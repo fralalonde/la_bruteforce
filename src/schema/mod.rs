@@ -48,7 +48,7 @@ pub struct Device {
 pub struct Control {
     pub name: String,
     pub sysex: Sysex,
-    pub bounds: Option<Vec<Bounds>>,
+    pub bounds: Vec<Bounds>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -99,9 +99,9 @@ pub struct Value {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
 pub struct Range {
-    pub lo: usize,
-    pub hi: usize,
-    pub offset: Option<usize>,
+    pub lo: isize,
+    pub hi: isize,
+    pub offset: Option<isize>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]

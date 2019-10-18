@@ -7,6 +7,7 @@ use midir::{MidiOutput, MidiOutputConnection};
 //mod microbrute;
 
 use snafu::Snafu;
+use crate::parse;
 
 use std::time::Duration;
 
@@ -15,7 +16,6 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::thread::sleep;
 
-use crate::schema::ParamKey;
 use crate::{devices, schema};
 use linked_hash_map::LinkedHashMap;
 use std::error::Error;
@@ -219,7 +219,7 @@ impl Device {
         }
     }
 
-    pub fn query(&mut self, params: &ParamKey) -> Result<Vec<String>> {
+    pub fn query(&mut self, params: Vec<parse::Token>) -> Result<Vec<String>> {
         let header = [
             self.schema.vendor.sysex.as_slice(),
             self.schema.sysex.as_slice(),
@@ -368,40 +368,6 @@ pub enum DeviceError {
         param_name: String,
     },
     ReadSizeError,
-}
-
-pub fn bound_str(bounds: Bounds, vcode: &[u8]) -> Option<String> {
-    if let Some(first) = vcode.get(0) {
-        match bounds {
-            Bounds::Discrete(values) => {
-                for v in &values {
-                    if v.0 == *first {
-                        return Some(v.1.to_string());
-                    }
-                }
-            }
-            Bounds::Range(offset, (lo, hi)) => {
-                if *first >= lo && *first <= hi {
-                    return Some((*first + offset).to_string());
-                }
-            }
-            Bounds::NoteSeq(offset) => {
-                return Some(
-                    vcode
-                        .iter()
-                        .map(|note| {
-                            MidiNote {
-                                note: (*note - offset),
-                            }
-                            .to_string()
-                        })
-                        .collect::<Vec<String>>()
-                        .join(","),
-                );
-            }
-        }
-    }
-    None
 }
 
 pub fn bound_codes(bounds: Bounds, bound_ids: &[String], reqs: (usize, usize)) -> Result<Vec<u8>> {
