@@ -10,19 +10,28 @@ use std::fmt;
 use std::str::FromStr;
 
 lazy_static! {
-    pub static ref SCHEMAS: LinkedHashMap<String, Device> = load_schemas();
+    pub static ref VENDORS: LinkedHashMap<String, Vendor> = load_vendors();
+    pub static ref DEVICES: LinkedHashMap<String, &'static Device> = load_devices();
 }
 
-fn load_schemas() -> LinkedHashMap<String, Device> {
+fn load_vendors() -> LinkedHashMap<String, Vendor> {
     let mut map = LinkedHashMap::new();
-    let dev = parse_schema(include_str!("MicroBrute.yaml")).expect("MicroBrute");
-    map.insert(dev.name.clone(), dev);
-    let dev = parse_schema(include_str!("BeatStep.yaml")).expect("BeatStep");
-    map.insert(dev.name.clone(), dev);
+    let vendor = parse_vendor(include_str!("Arturia.yaml")).expect("Arturia not loaded");
+    map.insert(vendor.name.clone(), vendor);
     map
 }
 
-fn parse_schema(body: &str) -> Result<Device> {
+fn load_devices() -> LinkedHashMap<String, &'static Device> {
+    let mut map = LinkedHashMap::new();
+    for v in VENDORS.values() {
+        for dev in &v.devices {
+            map.insert(dev.name.clone(), dev);
+        }
+    }
+    map
+}
+
+fn parse_vendor(body: &str) -> Result<Vendor> {
     Ok(serde_yaml::from_str(body)?)
 }
 
@@ -30,6 +39,7 @@ fn parse_schema(body: &str) -> Result<Device> {
 pub struct Vendor {
     pub name: String,
     pub sysex: Vec<u8>,
+    pub devices: Vec<Device>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -91,81 +101,83 @@ pub enum Bounds {
     MidiNotes(MidiNotes),
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Value {
     pub name: String,
-    pub sysex: Sysex,
+    pub sysex: u8,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Range {
     pub lo: isize,
     pub hi: isize,
     pub offset: Option<isize>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct MidiNotes {
     pub max_len: usize,
-    pub offset: Option<i8>,
+    pub offset: Option<i16>,
 }
 
 #[cfg(test)]
 mod test {
-    use crate::schema::{parse_schema, Device};
+    use crate::schema::{parse_vendor, Device, Vendor};
 
     #[test]
     fn test_parse() {
-        let z: Device = parse_schema(
+        let z: Vendor = parse_vendor(
 r"
-name: MicroBrute
-vendor: Arturia
-port_prefix: MicroBrute
-sysex:
-- 0x05
-indexed_controls:
-  Sequence:
-    range:
-      lo: 1
-      hi: 8
-      offset: 1
+name: Arturia
+sysex: [0x00]
+devices:
+  - name: MicroBrute
+    port_prefix: MicroBrute
     sysex:
-    - 0x04
-    - 0x3a
-    bounds:
-    - max_len: 64
-      offset: 24
-controls:
-  StepOn:
-    sysex:
-    - 0x01
-    - 0x3a
-    bounds:
-    - Gate: 0x01
-      Key: 0x02
-  MidiRxChan:
-    sysex:
-    - 0x01
-    - 0x3a
-    bounds:
-    - lo: 1
-      hi: 16
-      offset: 1
-    - All: 0x10
-  SeqStep:
-    sysex:
-      - 0x01
-      - 0x38
-    bounds:
-      - type: Values
-        - name: 1/4
-          sysex: 0x04
-        - name: 1/8
-          sysex: 0x08
-        - name: 1/16
-          sysex: 0x10
-        - name: 1/32
-          sysex: 0x20
+    - 0x05
+    indexed_controls:
+      Sequence:
+        range:
+          lo: 1
+          hi: 8
+          offset: 1
+        sysex:
+        - 0x04
+        - 0x3a
+        bounds:
+        - max_len: 64
+          offset: 24
+    controls:
+      StepOn:
+        sysex:
+        - 0x01
+        - 0x3a
+        bounds:
+        - Gate: 0x01
+          Key: 0x02
+      MidiRxChan:
+        sysex:
+        - 0x01
+        - 0x3a
+        bounds:
+        - lo: 1
+          hi: 16
+          offset: 1
+        - All: 0x10
+      SeqStep:
+        sysex:
+          - 0x01
+          - 0x38
+        bounds:
+          - type: Values
+            - name: 1/4
+              sysex: 0x04
+            - name: 1/8
+              sysex: 0x08
+            - name: 1/16
+              sysex: 0x10
+            - name: 1/32
+              sysex: 0x20
 ",
         )
         .unwrap();

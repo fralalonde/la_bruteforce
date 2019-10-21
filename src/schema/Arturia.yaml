@@ -1,0 +1,171 @@
+vendor:
+  name: Arturia
+  sysex: [0x00, 0x20, 0x6b]
+  devices:
+    ####
+    - name: MicroBrute
+      port_prefix: MicroBrute
+      sysex: [0x04]
+      classes:
+        Control:
+          out:
+            offset:
+            length:
+          in:
+            offset:
+            length:
+        Parameter:
+          offset: 8
+          length: 1
+        Value:
+          offset: 8
+          length: 1
+      parameters:
+        Seq:
+          range:
+            lo: 1
+            hi: 8
+            offset: 1
+          sysex: [0x23, 0x3a]
+          bounds:
+            - max_len: 64
+              offset: 24
+        MidiRxChan:
+          sysex: [0x01, 0x05]
+          bounds:
+            - lo: 1
+              hi: 16
+              offset: 1
+            - All: 0x10
+        MidiTxChan:
+          sysex: [0x01, 0x07]
+          bounds:
+            - lo: 1
+              hi: 16
+              offset: 1
+        KeyNotePriority:
+          sysex: [0x01, 0x0b]
+          bounds:
+            - LastNote: 0
+              LowNote: 1
+              HighNote: 2
+        KeyVelocityResponse:
+          sysex: [0x01, 0x11]
+          bounds:
+            - Logarithmic: 0
+              Exponential: 1
+              Linear: 2
+        LfoKeyRetrig:
+          sysex: [0x01, 0x0f]
+          bounds:
+            - Off: 0
+              On: 1
+        EnvLegatoMode:
+          sysex: [0x01, 0x0d]
+          bounds:
+            - Off: 0x00
+              On: 0x01
+        BendRange:
+          sysex: [0x01, 0x2c]
+          bounds:
+            - lo: 1
+              hi: 12
+              offset: 1
+        Gate:
+          sysex: [0x01, 0x36]
+          bounds:
+            - Short: 0
+              Medium: 1
+              Long: 2
+        Sync:
+          sysex: [0x01, 0x3c]
+          bounds:
+            - Auto: 0
+              Internal: 1
+              External: 2
+        SeqPlay:
+          sysex: [0x01, 0x2e]
+          bounds:
+            - Hold: 0
+              NoteOn: 1
+        SeqKeyRetrig:
+          sysex: [0x01, 0x34]
+          bounds:
+            - Reset: 0x00
+              Legato: 0x01
+              None: 0x02
+        SeqNextSeq:
+          sysex: [0x01, 0x32]
+          bounds:
+            - End: 0x00
+              Reset: 0x01
+              Continue: 0x02
+        SeqStep:
+          sysex: [0x01, 0x38]
+          bounds:
+            - 1/4: 0x04
+              1/8: 0x08
+              1/16: 0x10
+              1/32: 0x20
+        SeqStepOn:
+          sysex: [0x01, 0x2a]
+          bounds:
+            - Clock: 0x00
+              Gate: 0x01
+
+    ####
+    - name: BeatStep
+      vendor:
+        name: Arturia
+        sysex: [0x00, 0x20, 0x6b]
+      port_prefix: Arturia BeatStep
+      sysex: [0x01, 0x7f]
+      parameters:
+        Knob:
+          sysex: [0x00]
+          range:
+            lo: 1
+            hi: 16
+            offset: 1
+          modes:
+            Off: []
+            CC: [CCNum, Channel, Option, Min, Max]
+            RPN: [Option, Channel, MSB, LSB]
+          fields:
+            Mode:
+              sysex: [0x00]
+              modes: true
+              bounds:
+                - Off: 0x00
+                  CC: 0x01
+                  RPN: 0x02
+            CCNum:
+              sysex: [0x45]
+              bounds:
+                - lo: 0
+                  hi: 127
+            Min:
+              sysex: [0x45]
+              bounds:
+                - lo: 0
+                  hi: 127
+            Max:
+              sysex: []
+              bounds:
+                - lo: 0
+                  hi: 127
+            Channel:
+              sysex: []
+              bounds:
+                - lo: 1
+                  hi: 16
+                  offset: 1
+                - Global: 0x10
+            Option:
+              sysex: []
+              bounds:
+                - Absolute: 0x00
+                  Relative1: 0x01
+                  Relative2: 0x02
+                  Relative3: 0x03
+            - RPN:
