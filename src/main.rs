@@ -64,106 +64,111 @@ enum Cmd {
 }
 
 use crate::devices::CLIENT_NAME;
-use crate::schema::Bounds;
+use crate::schema::{Bounds, Device};
 
 fn main() -> devices::Result<()> {
     let cmd = Cmd::from_args();
 
-//    match cmd {
-//        Cmd::Ports => {
-//            let midi_client = MidiOutput::new(CLIENT_NAME)?;
-//            devices::output_ports(&midi_client)
-//                .iter()
-//                .for_each(|port| println!("{}", port.name))
-//        }
-//
-//        Cmd::Devices => schema::SCHEMAS.keys().for_each(|dev| println!("{}", dev)),
-//
-//        Cmd::Params { device_name } => {
-//            let dev = schema::SCHEMAS
-//                .get(&device_name)
-//                .ok_or(DeviceError::UnknownDevice { device_name })?;
-//            for (name, param) in dev.parameters.iter() {
-//                print!("{}", name);
-//                if let Some(range) = param.range {
-//                    print!("/[{}..{}]", range.lo, range.hi);
-//                }
-//                if let Some(modes) = &param.modes {
-//                    let z: Vec<String> = modes.keys().map(|s| s.to_string()).collect();
-//                    print!(":[{}]", z.join("|"));
-//                }
-//                println!()
-//            }
-//        }
-//        Cmd::Bounds {
-//            device_name,
-//            param_key,
-//            field_name,
-//        } => {
-//            let dev = schema::SCHEMAS
-//                .get(&device_name)
-//                .ok_or(DeviceError::UnknownDevice { device_name })?;
-//            let param_key = dev.parse_key(&param_key)?;
-//            let bounds: Vec<Bounds> = if let Some(field) = field_name {
-//                param_key.bounds(Some(&field))
-//            } else {
-//                param_key.bounds(None)
-//            }?;
-//            for bound in bounds {
-//                match bound {
-//                    schema::Bounds::Values(values) => {
-//                        for value in values {
-//                            println!("{}", value.1)
-//                        }
-//                    }
-//                    schema::Bounds::Range(range) => println!("[{}..{}]", range.lo, range.hi),
-//                    schema::Bounds::MidiNotes(_) => println!("note1,note2,note3,..."),
-//                }
-//            }
-//        }
-//        Cmd::Set {
-//            device_name,
-//            param_key,
-//            value_ids,
-//        } => {
-//            let dev = schema::SCHEMAS
-//                .get(&device_name)
-//                .ok_or(DeviceError::UnknownDevice { device_name })?;
-//            let param_key = dev.parse_key(&param_key)?;
-//            let mut dev = dev.locate()?.connect()?;
-//            dev.update(&param_key, &value_ids)?;
-//        }
-//        Cmd::Get {
-//            device_name,
-//            mut param_keys,
-//        } => {
-//            let dev = schema::SCHEMAS
-//                .get(&device_name)
-//                .ok_or(DeviceError::UnknownDevice { device_name })?;
-//            if param_keys.is_empty() {
-//                param_keys = dev
-//                    .parameters
-//                    .iter()
-//                    .flat_map(|(name, param)| {
-//                        if let Some(range) = param.range {
-//                            (range.lo..range.hi + 1)
-//                                .map(|index| format! {"{}/{}", name, index})
-//                                .collect()
-//                        } else {
-//                            vec![name.to_string()]
-//                        }
-//                    })
-//                    .collect();
-//            }
-//
-//            let mut loc = dev.locate()?.connect()?;
-//            for p in param_keys {
-//                let param_key = dev.parse_key(&p)?;
-//                let values = loc.query(&param_key)?;
-//                println!("{} {}", param_key, values.join(" "));
-//            }
-//        }
-//    }
+    match cmd {
+        Cmd::Ports => {
+            let midi_client = MidiOutput::new(CLIENT_NAME)?;
+            devices::output_ports(&midi_client)
+                .iter()
+                .for_each(|port| println!("{}", port.name))
+        }
+
+        Cmd::Devices => schema::DEVICES.keys().for_each(|dev| println!("{}", dev)),
+
+        Cmd::Params { device_name } => {
+            let (vendor, dev) = schema::DEVICES
+                .get(&device_name)
+                .ok_or(DeviceError::UnknownDevice { device_name })?;
+            if let Some(controls) = dev.controls {
+                for control in controls {
+                    print!("{}", control.name);
+                    println!()
+                }
+            }
+            if let Some(controls) = dev.indexed_controls {
+                for control in controls {
+                    print!("{}", control.name);
+                    print!("/[{}..{}]", control.index.lo, control.index.hi);
+                    println!()
+                }
+            }
+            // TODO modes
+        }
+        Cmd::Bounds {
+            device_name,
+            param_key,
+            field_name,
+        } => {
+            let dev = schema::DEVICES
+                .get(&device_name)
+                .ok_or(DeviceError::UnknownDevice { device_name })?;
+            let param_key = dev.parse_key(&param_key)?;
+            let bounds: Vec<Bounds> = if let Some(field) = field_name {
+                param_key.bounds(Some(&field))
+            } else {
+                param_key.bounds(None)
+            }?;
+            for bound in bounds {
+                match bound {
+                    schema::Bounds::Values(values) => {
+                        for value in values {
+                            println!("{}", value.1)
+                        }
+                    }
+                    schema::Bounds::Range(range) => println!("[{}..{}]", range.lo, range.hi),
+                    schema::Bounds::MidiNotes(_) => println!("note1,note2,note3,..."),
+                }
+            }
+        }
+        Cmd::Set {
+            device_name,
+            param_key,
+            value_ids,
+        } => {
+            let dev = schema::DEVICES
+                .get(&device_name)
+                .ok_or(DeviceError::UnknownDevice { device_name })?;
+            let param_key = dev.parse_key(&param_key)?;
+            let mut dev = dev.locate()?.connect()?;
+            dev.update(&param_key, &value_ids)?;
+        }
+        Cmd::Get {
+            device_name,
+            mut param_keys,
+        } => {
+            let tokens = parse::parse_query(&device_name, param_keys.as_mut_slice());
+
+            let dev = schema::DEVICES
+                .get(&device_name)
+                .ok_or(DeviceError::UnknownDevice { device_name })?;
+            if param_keys.is_empty() {
+                param_keys = dev
+                    .parameters
+                    .iter()
+                    .flat_map(|(name, param)| {
+                        if let Some(range) = param.range {
+                            (range.lo..range.hi + 1)
+                                .map(|index| format! {"{}/{}", name, index})
+                                .collect()
+                        } else {
+                            vec![name.to_string()]
+                        }
+                    })
+                    .collect();
+            }
+
+            let mut loc = dev.locate()?.connect()?;
+            for p in param_keys {
+                let param_key = dev.parse_key(&p)?;
+                let values = loc.query(&param_key)?;
+                println!("{} {}", param_key, values.join(" "));
+            }
+        }
+    }
 
     Ok(())
 }

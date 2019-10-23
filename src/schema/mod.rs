@@ -11,7 +11,7 @@ use std::str::FromStr;
 
 lazy_static! {
     pub static ref VENDORS: LinkedHashMap<String, Vendor> = load_vendors();
-    pub static ref DEVICES: LinkedHashMap<String, &'static Device> = load_devices();
+    pub static ref DEVICES: LinkedHashMap<String, (&'static Vendor, &'static Device)> = load_devices();
 }
 
 fn load_vendors() -> LinkedHashMap<String, Vendor> {
@@ -25,7 +25,7 @@ fn load_devices() -> LinkedHashMap<String, &'static Device> {
     let mut map = LinkedHashMap::new();
     for v in VENDORS.values() {
         for dev in &v.devices {
-            map.insert(dev.name.clone(), dev);
+            map.insert(dev.name.clone(), (v, dev));
         }
     }
     map
@@ -50,8 +50,8 @@ pub struct Device {
     pub sysex: Sysex,
 
     pub controls: Option<Vec<Control>>,
-    pub indexed_controls: Option<Vec<Control>>,
-    pub indexed_modal_controls: Option<Vec<Control>>,
+    pub indexed_controls: Option<Vec<IndexedControl>>,
+//    pub indexed_modal_controls: Option<Vec<Control>>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]

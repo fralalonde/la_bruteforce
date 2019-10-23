@@ -16,6 +16,11 @@ pub enum ParseError {
     ShortRead,
     EmptyMessage,
     EmptyQuery,
+    MissingControl,
+    MissingControlName,
+    BadControlSyntax,
+    BadControlIndex,
+    MissingValue,
 }
 
 // TODO SNAFUize this
@@ -217,12 +222,12 @@ impl SysexReply {
     }
 }
 
-pub fn parse_query(input: &mut str) -> Result<Vec<Token>, ParseError> {
-    if input.is_empty() {
+pub fn parse_query(device: &str, items: &mut [String]) -> Result<Vec<Token>, ParseError> {
+    if items.is_empty() {
         return Err(ParseError::EmptyQuery)
     }
     let mut query = TextQuery::new();
-    query.device(input)?;
+    query.device(device, items)?;
     Ok(query.tokens.drain(..).collect())
 }
 
@@ -233,6 +238,7 @@ struct TextQuery {
 }
 
 const DIGITS: &str = "0123456789";
+const WHITESPACE: &str = " \t";
 
 impl TextQuery {
     pub fn new() -> Self {
@@ -242,49 +248,48 @@ impl TextQuery {
         }
     }
 
-    fn device(&mut self, input: &mut str) -> Result<(), ParseError> {
-        for d in schema::DEVICES.values() {
-            if self.accept(&d.name, input) {
-                self.tokens.push(Token::Device(d));
-                self.expect("/", input)?;
-
-                return self.control(d, input);
-            }
+    fn device(&mut self, device: &str, items: &mut [String]) -> Result<(), ParseError> {
+        if let Some((vendor, dev)) = schema::DEVICES.get(device) {
+            self.tokens.push(Token::Vendor(vendor));
+            self.tokens.push(Token::Device(dev));
+            self.control(dev, items)
+        } else {
+            ParseError::UnknownDevice
         }
-        Err(ParseError::UnknownDevice)
     }
 
-    fn control(&mut self, device: &'static schema::Device, input: &mut str) -> Result<(), ParseError> {
-        if let Some(controls) = &device.controls {
-            for c in controls {
-                if self.accept(&c.name, input) {
-                    self.tokens.push(Token::Control(c));
-                    return self.bounds(&c.bounds, input);
-                }
-            }
+    fn control(&mut self, device: &'static schema::Device, items: &mut [String]) -> Result<(), ParseError> {
+        let (citem, mut items) = items.split_first_mut().ok_or(Err(ParseError::MissingControl))?;
+        let seq_parts: Vec<&str> = citem.split("/").collect();
+        let cname = seq_parts.get(0).ok_or(Err(ParseError::MissingControlName))?;
+        let mut mode_parts: Vec<&str> = citem.split(":").collect();
+        match (seq_parts.len(), mode_parts.len()) {
+            (1, 1) => {
+                let control = device.controls.find(|c| c.name.eq(cname)).ok_or(ParseError::UnknownControl)?;
+                self.tokens.push(Token::Control(control));
+                self.bounds(&control.bounds, items)
+            },
+            (2, 1) => {
+                let controls = device.indexed_controls.ok_or(ParseError::UnknownControl)?;
+                let control = controls.find(|c| c.name.eq(cname)).ok_or(ParseError::UnknownControl)?;
+                let idx = usize::from_str(seq_parts.get(1).unwrap()).map_err(|err| Err(ParseError::BadControlIndex))?;
+                self.tokens.push(Token::IndexedControl(control, idx));
+                self.bounds(&control.bounds, items)
+            },
+            // TODO
+//            (1, 2) => modal control
+//            (2, 2) => modal indexed control
+            _ => Err(ParseError::BadControlSyntax)
         }
-        if let Some(controls) = &device.indexed_controls {
-            for c in controls {
-                if self.accept(&c.name, input) {
-                    // could decompose into index() if other tokens need it e.g. device
-                    let index = usize::from_str(&self.take(DIGITS, input)?)?;
-                    self.tokens.push(Token::IndexedControl(c, index));
-                    return self.bounds(&c.bounds, input);
-                }
-            }
-        }
-
-        // TODO indexed modal controls
-
-        Err(ParseError::UnknownControl)
     }
 
-    fn bounds(&mut self, bounds: &'static [schema::Bounds], input: &mut str) -> Result<(), ParseError> {
+    fn bounds(&mut self, bounds: &'static [schema::Bounds], items: &mut [String]) -> Result<(), ParseError> {
+        let (value, mut items) = items.split_first_mut().ok_or(Err(ParseError::MissingValue))?;
         for b in bounds {
             let check = match b {
-                schema::Bounds::Values(values) => self.values(values, input),
-                schema::Bounds::Range(range) => self.in_range(range, input),
-                schema::Bounds::MidiNotes(seq) => self.note_seq(seq, input),
+                schema::Bounds::Values(values) => self.values(values, value),
+                schema::Bounds::Range(range) => self.in_range(range, value),
+                schema::Bounds::MidiNotes(seq) => self.note_seq(seq, value),
             };
             if let Some(token) = check {
                 self.tokens.push(token);
@@ -294,29 +299,26 @@ impl TextQuery {
         Err(ParseError::NoMatchingBounds)
     }
 
-    fn values(&mut self, values: &'static [schema::Value], input: &mut str) -> Option<Token> {
+    fn values(&mut self, values: &'static [schema::Value], input: &str) -> Option<Token> {
         for v in values {
-            if self.accept(&v.name, input) {
+            if v.name.eq(input) {
                 return Some(Token::Value(v));
             }
         }
         None
     }
 
-    fn in_range(&mut self, range: &'static schema::Range, input: &mut str) -> Option<Token> {
-        if let Ok(token) = self.take(DIGITS, input) {
-            if let Ok(mut value) = isize::from_str(&token) {
-                if value >= range.lo && value <= range.hi {
-                    value += range.offset.unwrap_or(0);
-                    return Some(Token::InRange(range, value))
-                }
-            }
+    fn in_range(&mut self, range: &'static schema::Range, input: &str) -> Option<Token> {
+        let mut value = isize::from_str(&input).ok()?;
+        if value >= range.lo && value <= range.hi {
+            value += range.offset.unwrap_or(0);
+            return Some(Token::InRange(range, value))
         }
         None
     }
 
-    fn note_seq(&mut self, range: &'static schema::MidiNotes, input: &mut str) -> Option<Token> {
-        let mut nit = input.split(" ");
+    fn note_seq(&mut self, range: &'static schema::MidiNotes, input: &str) -> Option<Token> {
+        let mut nit = input.split(",");
         let mut notes = vec![];
         for n in nit {
             if n.is_empty() {
@@ -329,15 +331,15 @@ impl TextQuery {
         Some(Token::MidiNotes(range, 0, notes))
     }
 
-    fn accept(&mut self, ident: &str, mut input: &mut str) -> bool {
-        if input.starts_with(ident) {
-            input = &mut input[ident.len()..];
-            return true;
-        }
-        false
-    }
-
-    fn take(&mut self, matching: &str, mut input: &mut str) -> Result<String, ParseError> {
+//    fn accept(&mut self, ident: &str, mut items: &mut [String]) -> bool {
+//        if input.starts_with(ident) {
+//            input = &mut input[ident.len()..];
+//            return true;
+//        }
+//        false
+//    }
+//
+    fn take(&mut self, matching: &str, input: &str) -> Result<String, ParseError> {
         let mut i = 0;
         let mut vh = input.chars();
         while let Some(c) = vh.next() {
@@ -347,12 +349,12 @@ impl TextQuery {
         let (z, input) = input.split_at_mut(i);
         Ok(z.to_string())
     }
-
-    fn expect(&mut self, ident: &str, input: &mut str) -> Result<(), ParseError> {
-        if self.accept(ident, input) {
-            Ok(())
-        } else {
-            Err(ParseError::Unexpected)
-        }
-    }
+//
+//    fn expect(&mut self, ident: &str, items: &mut [String]) -> Result<(), ParseError> {
+//        if self.accept(ident, input) {
+//            Ok(())
+//        } else {
+//            Err(ParseError::Unexpected)
+//        }
+//    }
 }
