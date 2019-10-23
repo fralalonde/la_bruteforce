@@ -3,11 +3,13 @@ pub type Sysex = Vec<u8>;
 use serde::{Deserialize, Serialize};
 
 use crate::devices;
-use crate::devices::{DeviceError, DevicePort, MidiNote, Result, CLIENT_NAME};
+use crate::devices::{DeviceError, DevicePort, Result, CLIENT_NAME};
 use linked_hash_map::LinkedHashMap;
 use midir::MidiOutput;
 use std::fmt;
 use std::str::FromStr;
+use std::fmt::Display;
+use crate::parse::ParseError;
 
 lazy_static! {
     pub static ref VENDORS: LinkedHashMap<String, Vendor> = load_vendors();
@@ -119,6 +121,72 @@ pub struct MidiNotes {
     pub max_len: usize,
     pub offset: Option<i16>,
 }
+
+#[derive(Debug)]
+pub struct MidiNote {
+    pub note: u8,
+}
+
+impl fmt::Display for MidiNote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let oct = (self.note - 12) / 12;
+        let n = self.note % 12;
+        let mut prev_note = NoteName::C;
+        for i in NoteName::iter() {
+            if i as u8 == n {
+                let z: &'static str = i.into();
+                f.write_fmt(format_args!("{}{}", z, oct))?;
+                break;
+            } else if i as u8 > n {
+                let z: &'static str = prev_note.into();
+                f.write_fmt(format_args!("{}#{}", z, oct))?;
+                break;
+            } else {
+                prev_note = i;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
+enum NoteName {
+    C = 0,
+    D = 2,
+    E = 4,
+    F = 5,
+    G = 7,
+    A = 9,
+    B = 11,
+}
+
+impl FromStr for MidiNote {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> ::std::result::Result<Self, Self::Err> {
+        let mut iter = s.chars();
+        let mut item = iter.next();
+        if let Some(n) = item {
+            let mut note = NoteName::from_str(&n.to_string())? as u8;
+            item = iter.next();
+            if let Some(sharp) = item {
+                if sharp == '#' {
+                    note = note + 1;
+                    item = iter.next();
+                }
+            }
+            let octave = match item {
+                Some(oct) => u8::from_str(&oct.to_string())?,
+                None => 0,
+            };
+            // C0 starts at 12
+            Some(MidiNote {
+                note: octave * 12 + note + 12,
+            })
+        }.ok_or(ParseError::BadNoteSyntax)?
+    }
+}
+
 
 #[cfg(test)]
 mod test {

@@ -14,17 +14,21 @@ use structopt::StructOpt;
 use strum::IntoEnumIterator;
 
 use crate::devices::DeviceError;
+use crate::devices::CLIENT_NAME;
+
+use crate::schema::{Bounds, Device};
+use crate::parse::{Token, ParseError};
 
 #[derive(StructOpt, Debug)]
 #[structopt(
     name = "la_bruteforce",
-    about = "La BruteForce is used to edit Arturia devices hidden parameters"
+    about = "La BruteForce is used to edit Arturia devicf hidden parameters"
 )]
 enum Cmd {
-    /// All active devices
+    /// All active devicf
     Ports,
 
-    /// All known devices
+    /// All known devicf
     Devices,
 
     /// A single device's possible parameters
@@ -56,15 +60,10 @@ enum Cmd {
     Set {
         /// Name of the device as listed
         device_name: String,
-        /// Name of the param as listed
-        param_key: String,
         /// New bound value of the param
-        value_ids: Vec<String>,
+        key_and_value: Vec<String>,
     },
 }
-
-use crate::devices::CLIENT_NAME;
-use crate::schema::{Bounds, Device};
 
 fn main() -> devices::Result<()> {
     let cmd = Cmd::from_args();
@@ -126,21 +125,20 @@ fn main() -> devices::Result<()> {
         }
         Cmd::Set {
             device_name,
-            param_key,
-            value_ids,
+            mut key_and_value,
         } => {
-            let dev = schema::DEVICES
-                .get(&device_name)
-                .ok_or(DeviceError::UnknownDevice { device_name })?;
-            let param_key = dev.parse_key(&param_key)?;
-            let mut dev = dev.locate()?.connect()?;
-            dev.update(&param_key, &value_ids)?;
+            let tokens = parse::parse_query(&device_name, &mut key_and_value)?;
+            let device = *tokens.iter()
+                .find_map(|token| if let Token::Device(d) = token {Some(d)} else {None})
+                .ok_or(ParseError::MissingDevice);
+            let mut dev = devices::locate(device)?.connect()?;
+            dev.update(&tokens)?;
         }
         Cmd::Get {
             device_name,
             mut param_keys,
         } => {
-            let tokens = parse::parse_query(&device_name, param_keys.as_mut_slice());
+            let tokens = parse::parse_query(&device_name, param_keys.as_mut_slice())?;
 
             let dev = schema::DEVICES
                 .get(&device_name)

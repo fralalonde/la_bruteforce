@@ -1,10 +1,11 @@
-use crate::devices::{DeviceError, MidiNote};
+use crate::devices::{DeviceError};
 use crate::parse::Token::{Value, Control, Vendor};
 use crate::schema;
 use std::collections::VecDeque;
 use snafu::*;
 use std::str::FromStr;
 use std::num::ParseIntError;
+use crate::schema::MidiNote;
 
 #[derive(Debug, Snafu)]
 pub enum ParseError {
@@ -16,11 +17,13 @@ pub enum ParseError {
     ShortRead,
     EmptyMessage,
     EmptyQuery,
+    MissingDevice,
     MissingControl,
     MissingControlName,
     BadControlSyntax,
     BadControlIndex,
     MissingValue,
+    BadNoteSyntax,
 }
 
 // TODO SNAFUize this

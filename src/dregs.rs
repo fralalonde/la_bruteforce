@@ -1,84 +1,3 @@
-impl Device {
-    pub fn locate(&self) -> Result<DevicePort> {
-        let client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
-        Ok(devices::output_ports(&client)
-            .into_iter()
-            .find(|port| port.name.starts_with(&self.port_prefix))
-            .map(|port| devices::DevicePort {
-                schema: self.clone(),
-                client,
-                port,
-            })
-            .ok_or(DeviceError::NoConnectedDevice {
-                device_name: self.name.clone(),
-            })?)
-    }
-
-    pub fn parse_key(&self, param_key: &str) -> Result<ParamKey> {
-        let seq_parts: Vec<&str> = param_key.split("/").collect();
-        let name: &str = seq_parts.get(0).ok_or("Empty param key")?;
-        let mut mode_parts: Vec<&str> = param_key.split(":").collect();
-        let (index, mode) =  match (seq_parts.len(), mode_parts.len()) {
-            (1, 1) => (None, None),
-            (2, 1) => (seq_parts.get(1), None),
-            (1, 2) => (None, mode_parts.get(1)),
-            (2, 2) => {
-                // i.e. "Seq/3:Mode" : re-split "3" from "Mode"
-                mode_parts = seq_parts.get(1).unwrap().split(":").collect();
-                (mode_parts.get(0), mode_parts.get(1))
-            },
-            _ => Err(DeviceError::UnknownParameter {
-                param_name: param_key.to_string(),
-            })?
-        };
-        let param = self
-            .parameters
-            .get(name)
-            .ok_or(DeviceError::UnknownParameter {
-                param_name: param_key.to_string(),
-            })?;
-
-        let index_val = if let Some(idx_match) = index {
-            Some(usize::from_str(*idx_match)?)
-        } else {
-            None
-        };
-        let index = match (index_val, param.range) {
-            (Some(value), Some(range)) if value >= range.lo && value <= range.hi => Some(value),
-            (None, None) => None,
-            _ => {
-                return Err(Box::new(DeviceError::BadIndexParameter {
-                    param_name: param_key.to_string(),
-                }))
-            }
-        };
-
-        let mode = match (mode, &param.modes) {
-            (Some(mode_str), Some(modes)) => {
-                if let Some(mode) = modes.get(*mode_str) {
-                    Some(mode.clone())
-                } else {
-                    return Err(Box::new(DeviceError::BadModeParameter {
-                        param_name: param_key.to_string(),
-                    }));
-                }
-            }
-            (None, None) => None,
-            _ => {
-                return Err(Box::new(DeviceError::BadModeParameter {
-                    param_name: param_key.to_string(),
-                }))
-            }
-        };
-
-        Ok(ParamKey {
-            param: param.clone(),
-            name: name.to_string(),
-            index,
-            mode,
-        })
-    }
-}
 
 pub struct ParamKey {
     pub name: String,
@@ -99,6 +18,72 @@ impl fmt::Display for ParamKey {
         Ok(())
     }
 }
+
+pub fn parse_key(&self, param_key: &str) -> Result<ParamKey> {
+    let seq_parts: Vec<&str> = param_key.split("/").collect();
+    let name: &str = seq_parts.get(0).ok_or("Empty param key")?;
+    let mut mode_parts: Vec<&str> = param_key.split(":").collect();
+    let (index, mode) =  match (seq_parts.len(), mode_parts.len()) {
+        (1, 1) => (None, None),
+        (2, 1) => (seq_parts.get(1), None),
+        (1, 2) => (None, mode_parts.get(1)),
+        (2, 2) => {
+            // i.e. "Seq/3:Mode" : re-split "3" from "Mode"
+            mode_parts = seq_parts.get(1).unwrap().split(":").collect();
+            (mode_parts.get(0), mode_parts.get(1))
+        },
+        _ => Err(DeviceError::UnknownParameter {
+            param_name: param_key.to_string(),
+        })?
+    };
+    let param = self
+        .parameters
+        .get(name)
+        .ok_or(DeviceError::UnknownParameter {
+            param_name: param_key.to_string(),
+        })?;
+
+    let index_val = if let Some(idx_match) = index {
+        Some(usize::from_str(*idx_match)?)
+    } else {
+        None
+    };
+    let index = match (index_val, param.range) {
+        (Some(value), Some(range)) if value >= range.lo && value <= range.hi => Some(value),
+        (None, None) => None,
+        _ => {
+            return Err(Box::new(DeviceError::BadIndexParameter {
+                param_name: param_key.to_string(),
+            }))
+        }
+    };
+
+    let mode = match (mode, &param.modes) {
+        (Some(mode_str), Some(modes)) => {
+            if let Some(mode) = modes.get(*mode_str) {
+                Some(mode.clone())
+            } else {
+                return Err(Box::new(DeviceError::BadModeParameter {
+                    param_name: param_key.to_string(),
+                }));
+            }
+        }
+        (None, None) => None,
+        _ => {
+            return Err(Box::new(DeviceError::BadModeParameter {
+                param_name: param_key.to_string(),
+            }))
+        }
+    };
+
+    Ok(ParamKey {
+        param: param.clone(),
+        name: name.to_string(),
+        index,
+        mode,
+    })
+}
+
 
 impl ParamKey {
     pub fn bounds(&self, field_name: Option<&str>) -> Result<Vec<Bounds>> {
@@ -228,4 +213,107 @@ fn sequence(parse: &mut SysexReply) -> Result<(), ParseError> {
     parse.tokens.push(Length(parse.take(1)?));
     parse.tokens.push(Sequence(parse.take(32)?));
     Ok(())
+}
+
+
+fn decode(schema: schema::Device, msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
+    let param = schema.parse_msg(msg);
+    if let Some(param) = into_param(msg) {
+        match param {
+            NoteSeq(_idx) => {
+                let notes = result_map.entry(param.to_string()).or_insert(vec![]);
+                for nval in &msg[7..] {
+                    if *nval == 0 {
+                        break;
+                    }
+                    if *nval == REST_NOTE {
+                        notes.push("_".to_string());
+                    } else if *nval < 24 {
+                        notes.push(format!("?{}", *nval));
+                    } else {
+                        notes.push(MidiNote { note: *nval - 24 }.to_string());
+                    }
+                }
+            }
+            param => {
+                if let Some(bound) = devicf::bound_str(bounds(param), &[msg[4]]) {
+                    let _ = result_map.insert(param.to_string(), vec![bound]);
+                } else {
+                    eprintln!(
+                        "param {} unbound value code '{}'",
+                        param.to_string(),
+                        msg[4]
+                    );
+                }
+            }
+        }
+    };
+}
+
+#[derive(Debug, Clone)]
+pub enum Bounds {
+    /// List of raw value and display name pairs
+    Discrete(Vec<(MidiValue, &'static str)>),
+
+    /// Raw value offset and display value bounds (Low to High, inclusive)
+    Range(u8, (MidiValue, MidiValue)),
+
+    /// Sequence of notes with offset from std MIDI note value
+    NoteSeq(u8),
+}
+
+
+pub fn bound_codes(bounds: Bounds, bound_ids: &[String], reqs: (usize, usize)) -> Result<Vec<u8>> {
+    if bound_ids.len() < reqs.0 {
+        return Err(Box::new(DeviceError::MissingValue {
+            param_name: "param".to_string(),
+        }));
+    }
+    if bound_ids.len() > reqs.1 {
+        return Err(Box::new(DeviceError::TooManyValues {
+            param_name: "param".to_string(),
+        }));
+    }
+    match bounds {
+        Bounds::Discrete(values) => {
+            let b_id = bound_ids.get(0).unwrap();
+            for v in &values {
+                if v.1.eq(b_id) {
+                    return Ok(vec![v.0]);
+                }
+            }
+            Err(Box::new(DeviceError::UnknownValue {
+                value_name: b_id.to_owned(),
+            }))
+        }
+        Bounds::Range(offset, (lo, hi)) => {
+            let b_id = bound_ids.get(0).unwrap();
+            let val = u8::from_str(b_id)?;
+            if val >= lo && val <= hi {
+                Ok(vec![val - offset])
+            } else {
+                Err(Box::new(DeviceError::ValueOutOfBound {
+                    value_name: b_id.to_owned(),
+                }))
+            }
+        }
+        Bounds::NoteSeq(offset) => {
+            let mut bcode = Vec::with_capacity(bound_ids.len());
+            for b_id in bound_ids {
+                bcode.push(MidiNote::from_str(b_id)?.note + offset);
+            }
+            Ok(bcode)
+        }
+    }
+}
+
+fn sysex(vendor: &[u8], parts: &[&[u8]]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(64);
+    msg.push(0xf0);
+    msg.extend_from_slice(vendor);
+    for p in parts {
+        msg.extend_from_slice(p);
+    }
+    msg.push(0xf7);
+    msg
 }
