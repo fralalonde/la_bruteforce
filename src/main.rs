@@ -129,9 +129,9 @@ fn main() -> devices::Result<()> {
         } => {
             let tokens = parse::parse_query(&device_name, &mut key_and_value)?;
             let device = *tokens.iter()
-                .find_map(|token| if let Token::Device(d) = token {Some(d)} else {None})
+                .find_map(|token| if let Token::Device(d, idx) = token {Some(d)} else {None})
                 .ok_or(ParseError::MissingDevice);
-            let mut dev = devices::locate(device)?.connect()?;
+            let mut dev = devices::locate(device, idx)?.connect()?;
             dev.update(&tokens)?;
         }
         Cmd::Get {

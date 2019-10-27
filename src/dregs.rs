@@ -307,13 +307,3 @@ pub fn bound_codes(bounds: Bounds, bound_ids: &[String], reqs: (usize, usize)) -
     }
 }
 
-fn sysex(vendor: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(64);
-    msg.push(0xf0);
-    msg.extend_from_slice(vendor);
-    for p in parts {
-        msg.extend_from_slice(p);
-    }
-    msg.push(0xf7);
-    msg
-}

@@ -33,85 +33,164 @@ impl From<std::num::ParseIntError> for ParseError {
     }
 }
 
+#[derive(Debug, Snafu)]
+pub enum WriteError {
+
+}
+
 #[derive(Debug)]
 pub enum Token {
     Vendor(&'static schema::Vendor),
-    Device(&'static schema::Device),
-    SysexId(usize),
-    Patch(usize),
+    Device(&'static schema::Device, u8),
+
+//    Patch(usize),
 
     Control(&'static schema::Control),
-    IndexedControl(&'static schema::Control, usize),
+    IndexedControl(&'static schema::IndexedControl, u8),
 
     Mode(&'static schema::Value),
     Field(&'static schema::Field),
 
     Value(&'static schema::Value),
     InRange(&'static schema::Range, isize),
-    MidiNotes(&'static schema::MidiNotes, usize, Vec<MidiNote>),
+    MidiNotes(&'static schema::MidiNotes, u8, Vec<MidiNote>),
+}
+
+impl Token {
+    pub fn to_sysex(&self, buffer: &mut Vec<u8>) {
+        match self {
+            Token::Vendor(v) => buffer.extend_from_slice(&v.sysex),
+            Token::Device(d, idx) => {
+                buffer.extend_from_slice(&d.sysex);
+                buffer.push(*idx);
+            },
+            Token::Control(c) => buffer.extend_from_slice(&c.sysex),
+            Token::IndexedControl(c, idx) => {
+                buffer.extend_from_slice(&c.sysex);
+                buffer.push(*idx);
+            },
+
+            Token::Mode(m) => buffer.push(m.sysex),
+            Token::Field(f) => buffer.extend_from_slice(&f.sysex),
+
+            Token::Value(v) => buffer.extend_from_slice(*v.sysex),
+            Token::InRange(r, idx) => buffer.push((*idx) as u8),
+            Token::MidiNotes(s, offset, notes) => {
+                buffer.push(*offset);
+                buffer.push(notes.len() as u8);
+                buffer.extend_from_slice(notes.as_ref())
+            },
+        }
+    }
+}
+
+pub enum AST {
+    Tree(Token, Vec<AST>),
+    Chain(Token, Box<AST>),
+    Leaf(Token),
 }
 
 const SYSEX_BEGIN: &[u8] = &[0xf0];
 const SYSEX_END: &[u8] = &[0xf7];
 
+
+impl AST {
+    pub fn to_sysex(&self, msg_id: &mut usize) -> Result<Vec<Vec<u8>>, WriteError> {
+        let mut messages: Vec<Vec<u8>> = vec![];
+        let mut buffer = SYSEX_BEGIN.to_owned();
+        self.to_sysex_inner(&mut buffer, &mut messages);
+        Ok(messages)
+    }
+
+    fn to_sysex_inner(&self, buffer: &mut Vec<u8>, messages: &mut Vec<Vec<u8>>) {
+        match self {
+            AST::Tree(token, children) => {
+                token.to_sysex(buffer);
+                for c in children {
+                    let mut buffer = buffer.clone();
+                    c.to_sysex_inner(&mut buffer, messages);
+                }
+            },
+            AST::Chain(token, child) => {
+                token.to_sysex(buffer);
+                child.to_sysex_inner(buffer, messages);
+            },
+            AST::Leaf(token) => {
+                token.to_sysex(buffer);
+                buffer.extend_from_slice(SYSEX_END);
+                messages.push(buffer.drain(..).collect());
+            },
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SysexReply {
-//    offset: usize,
-    tokens: Vec<Token>,
+    roots: Vec<AST>,
     mode: Option<&'static schema::Value>
 }
 
 impl SysexReply {
     pub fn new() -> Self {
         SysexReply {
-//            offset: 0,
-            tokens: Vec::with_capacity(6),
+            roots: Vec::with_capacity(1),
             mode: None,
         }
     }
 
-    pub fn parse(&mut self, message: &mut [u8]) -> Result<Vec<Token>, ParseError> {
-//        self.offset = 0;
+    pub fn parse(&mut self, message: &[u8]) -> Result<(), ParseError> {
         if message.is_empty() {
             return Err(ParseError::EmptyMessage);
         }
+        let mut message = message.clone().as_mut();
         self.expect(SYSEX_BEGIN, message)?;
         self.vendor(message)?;
         self.expect(SYSEX_END, message)?;
-        Ok(self.tokens.drain(..).collect())
+    }
+
+    pub fn collect(self) -> Vec<AST> {
+        self.tokens.drain(..).collect()
     }
 
     fn vendor(&mut self, message: &mut [u8]) -> Result<(), ParseError> {
         for v in schema::VENDORS.values() {
             if self.accept(&v.sysex, message) {
-                self.tokens.push(Token::Vendor(v));
-                return self.device(v, message);
+                let dev =
+                self.roots.push(
+                    AST::Node(
+                        Token::Vendor(v),
+                        vec![self.device(v, message)?]
+                    ));
+                return Ok(())
             }
         }
         Err(ParseError::UnknownVendor)
     }
 
-    fn device(&mut self, vendor: &'static schema::Vendor, message: &mut [u8]) -> Result<(), ParseError> {
+    fn device(&mut self, vendor: &'static schema::Vendor, message: &mut [u8]) -> Result<AST, ParseError> {
         for d in &vendor.devices {
             if self.accept(&d.sysex, message) {
-                self.tokens.push(Token::Device(d));
+                let sysex_id = self.next_byte(message)?;
+                let _msg_id = self.next_byte(message)?;
+                let _unknown = self.next_byte(message)?; // 01 for regular param, 23 for sequences
 
-                self.expect(&[0x01], message)?; // device sysex id?
-                self.next_byte(message)?; // msg id, unused for now
-                self.next_byte(message)?; // unknown, ignore (01 for regular param, 23 for sequences)
-
-                return self.control(d, message);
+                return Ok(AST::Chain(
+                    Token::Device(d, sysex_id),
+                    Box::new(self.control(d, message)?),
+                ));
             }
         }
         Err(ParseError::UnknownDevice)
     }
 
-    fn control(&mut self, device: &'static schema::Device, message: &mut [u8]) -> Result<(), ParseError> {
+    fn control(&mut self, device: &'static schema::Device, message: &mut [u8]) -> Result<AST, ParseError> {
         if let Some(controls) = &device.controls {
             for c in controls {
                 if self.accept(&c.sysex, message) {
-                    self.tokens.push(Token::Control(c));
-                    return self.bounds(&c.bounds, message);
+                    return Ok(AST::Chain(
+                        Token::Control(c),
+                        self.bounds(&c.bounds, message)?,
+                    ));
                 }
             }
         }
@@ -119,9 +198,11 @@ impl SysexReply {
             for c in controls {
                 if self.accept(&c.sysex, message) {
                     // could decompose into index() if other tokens need it e.g. device
-                    let index = self.next_byte(message)? as usize;
-                    self.tokens.push(Token::IndexedControl(c, index));
-                    return self.bounds(&c.bounds, message);
+                    let index = self.next_byte(message)?;
+                    return Ok(AST::Chain(
+                        Token::IndexedControl(c, index),
+                        self.bounds(&c.bounds, message)?,
+                    ));
                 }
             }
         }
@@ -131,20 +212,19 @@ impl SysexReply {
         Err(ParseError::UnknownControl)
     }
 
-    fn bounds(&mut self, bounds: &'static [schema::Bounds], message: &mut [u8]) -> Result<(), ParseError> {
+    fn bounds(&mut self, bounds: &'static [schema::Bounds], message: &mut [u8]) -> Result<AST, ParseError> {
         for b in bounds {
             let check = match b {
                 schema::Bounds::Values(values) => self.values(values, message),
                 schema::Bounds::Range(range) => self.in_range(range, message),
                 schema::Bounds::MidiNotes(seq) => {
-                    let start_offset = self.next_byte(message)? as usize;
+                    let start_offset = self.next_byte(message)?;
                     let seq_length = self.next_byte(message)? as usize;
                     self.note_seq(start_offset, seq_length, seq, message)
                 },
             };
             if let Some(token) = check {
-                self.tokens.push(token);
-                return Ok(())
+                return Ok(AST::Leaf(token))
             }
         }
         Err(ParseError::NoMatchingBounds)
@@ -180,7 +260,7 @@ impl SysexReply {
         )
     }
 
-    fn note_seq(&mut self, start_offset: usize, seq_length: usize, range: &'static schema::MidiNotes, message: &mut [u8]) -> Option<Token> {
+    fn note_seq(&mut self, start_offset: u8, seq_length: usize, range: &'static schema::MidiNotes, message: &mut [u8]) -> Option<Token> {
         let pitch_offset = range.offset.unwrap_or(0);
         if let Ok(deez_notez) = self.take(seq_length, message) {
             let mut notes = vec![];
@@ -225,19 +305,19 @@ impl SysexReply {
     }
 }
 
-pub fn parse_query(device: &str, items: &mut [String]) -> Result<Vec<Token>, ParseError> {
+pub fn parse_query(device: &str, items: &mut [String]) -> Result<AST, ParseError> {
     if items.is_empty() {
         return Err(ParseError::EmptyQuery)
     }
     let mut query = TextQuery::new();
-    query.device(device, items)?;
-    Ok(query.tokens.drain(..).collect())
+    Ok(query.device(device, items)?)
+//    Ok(query.tokens.drain(..).collect())
 }
 
 #[derive(Debug)]
 struct TextQuery {
-    tokens: Vec<Token>,
-    mode: Option<&'static schema::Value>
+//    tokens: Vec<Token>,
+//    mode: Option<&'static schema::Value>
 }
 
 const DIGITS: &str = "0123456789";
@@ -246,22 +326,25 @@ const WHITESPACE: &str = " \t";
 impl TextQuery {
     pub fn new() -> Self {
         TextQuery {
-            tokens: Vec::with_capacity(6),
-            mode: None,
+//            tokens: Vec::with_capacity(6),
+//            mode: None,
         }
     }
 
-    fn device(&mut self, device: &str, items: &mut [String]) -> Result<(), ParseError> {
+    fn device(&mut self, device: &str, items: &mut [String]) -> Result<AST,  ParseError> {
         if let Some((vendor, dev)) = schema::DEVICES.get(device) {
-            self.tokens.push(Token::Vendor(vendor));
-            self.tokens.push(Token::Device(dev));
-            self.control(dev, items)
+            Ok(AST::Node(Token::Vendor(vendor),
+                   vec![AST::Node(
+                       Token::Device(dev, 1),
+                       vec![self.control(dev, items)?]),
+                   ])
+            )
         } else {
             ParseError::UnknownDevice
         }
     }
 
-    fn control(&mut self, device: &'static schema::Device, items: &mut [String]) -> Result<(), ParseError> {
+    fn control(&mut self, device: &'static schema::Device, items: &mut [String]) -> Result<AST,  ParseError> {
         let (citem, mut items) = items.split_first_mut().ok_or(Err(ParseError::MissingControl))?;
         let seq_parts: Vec<&str> = citem.split("/").collect();
         let cname = seq_parts.get(0).ok_or(Err(ParseError::MissingControlName))?;
@@ -269,15 +352,19 @@ impl TextQuery {
         match (seq_parts.len(), mode_parts.len()) {
             (1, 1) => {
                 let control = device.controls.find(|c| c.name.eq(cname)).ok_or(ParseError::UnknownControl)?;
-                self.tokens.push(Token::Control(control));
-                self.bounds(&control.bounds, items)
+                Ok(AST::Node(
+                    Token::Control(control),
+                    vec![self.bounds(&control.bounds, items)?]
+                ))
             },
             (2, 1) => {
                 let controls = device.indexed_controls.ok_or(ParseError::UnknownControl)?;
                 let control = controls.find(|c| c.name.eq(cname)).ok_or(ParseError::UnknownControl)?;
-                let idx = usize::from_str(seq_parts.get(1).unwrap()).map_err(|err| Err(ParseError::BadControlIndex))?;
-                self.tokens.push(Token::IndexedControl(control, idx));
-                self.bounds(&control.bounds, items)
+                let idx = u8::from_str(seq_parts.get(1).unwrap()).map_err(|err| Err(ParseError::BadControlIndex))?;
+                Ok(AST::Node(
+                    Token::IndexedControl(control, idx),
+                    vec![self.bounds(&control.bounds, items)?]
+                ))
             },
             // TODO
 //            (1, 2) => modal control
@@ -286,7 +373,7 @@ impl TextQuery {
         }
     }
 
-    fn bounds(&mut self, bounds: &'static [schema::Bounds], items: &mut [String]) -> Result<(), ParseError> {
+    fn bounds(&mut self, bounds: &'static [schema::Bounds], items: &mut [String]) -> Result<AST,  ParseError> {
         let (value, mut items) = items.split_first_mut().ok_or(Err(ParseError::MissingValue))?;
         for b in bounds {
             let check = match b {
@@ -295,8 +382,9 @@ impl TextQuery {
                 schema::Bounds::MidiNotes(seq) => self.note_seq(seq, value),
             };
             if let Some(token) = check {
-                self.tokens.push(token);
-                return Ok(())
+                return Ok(AST::Leaf(
+                    token,
+                ))
             }
         }
         Err(ParseError::NoMatchingBounds)
@@ -342,7 +430,7 @@ impl TextQuery {
 //        false
 //    }
 //
-    fn take(&mut self, matching: &str, input: &str) -> Result<String, ParseError> {
+    fn take(&mut self, matching: &str, input: &mut str) -> Result<String, ParseError> {
         let mut i = 0;
         let mut vh = input.chars();
         while let Some(c) = vh.next() {
@@ -353,7 +441,7 @@ impl TextQuery {
         Ok(z.to_string())
     }
 //
-//    fn expect(&mut self, ident: &str, items: &mut [String]) -> Result<(), ParseError> {
+//    fn expect(&mut self, ident: &str, items: &mut [String]) -> Result<AST,  ParseError> {
 //        if self.accept(ident, input) {
 //            Ok(())
 //        } else {

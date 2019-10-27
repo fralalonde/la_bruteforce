@@ -18,7 +18,7 @@ use linked_hash_map::LinkedHashMap;
 use std::error::Error;
 use strum::IntoEnumIterator;
 use crate::schema::MidiNote;
-use crate::parse::Token;
+use crate::parse::{Token, SysexReply, AST};
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -135,10 +135,10 @@ fn matching_input_port(midi: &MidiInput, out_port: &str) -> Option<MidiPort> {
         .find(|port| port.name.eq(out_port))
 }
 
-pub struct SysexReceiver(MidiInputConnection<LinkedHashMap<String, Vec<String>>>);
+pub struct SysexReceiver(MidiInputConnection<SysexReply>);
 
 impl SysexReceiver {
-    pub fn close_wait(self, wait_millis: u64) -> LinkedHashMap<String, Vec<String>> {
+    pub fn close_wait(self, wait_millis: u64) -> SysexReply {
         sleep(Duration::from_millis(wait_millis));
         self.0.close().1
     }
@@ -157,7 +157,7 @@ pub struct Device {
     msg_id: usize,
 }
 
-pub fn locate(dev: &schema::Device) -> Result<DevicePort> {
+pub fn locate(dev: &schema::Device, index: usize) -> Result<DevicePort> {
     let client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
     Ok(devices::output_ports(&client)
         .into_iter()
@@ -182,14 +182,7 @@ impl Device {
             self.schema.sysex.as_slice(),
         ]
         .concat();
-        let sysex_replies = self.sysex_receiver(IDENTITY_REPLY, move |message, result| {
-            if message.starts_with(&header) {
-                // TODO could grab firmware version, etc. for return
-                let _ = result.insert(ID_KEY.to_string(), vec![]);
-            } else {
-                eprintln!("received spurious sysex {}, filtering on {}", hex::encode(message), hex::encode(&header));
-            }
-        })?;
+        let sysex_replies = self.sysex_receiver()?;
         self.connection
             .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
         sysex_replies
@@ -201,25 +194,17 @@ impl Device {
         Ok(())
     }
 
-    pub fn sysex_receiver<D>(&self, match_header: &'static [u8], decode: D) -> Result<SysexReceiver>
+    pub fn sysex_receiver<D>(&self) -> Result<SysexReceiver>
     where
-        D: Fn(&[u8], &mut LinkedHashMap<String, Vec<String>>) + Send + 'static,
+        D: Fn(&[u8], &mut SysexReply) + Send + 'static,
     {
         let midi_in = MidiInput::new(CLIENT_NAME)?;
         if let Some(in_port) = matching_input_port(&midi_in, &self.port.name) {
             Ok(SysexReceiver(midi_in.connect(
                 in_port.number,
                 "Query Results",
-                move |_ts, message, result_map| {
-                    if message[0] == 0xf0
-                        && message[message.len() - 1] == 0xf7
-                        && message[1..].starts_with(match_header)
-                    {
-                        let subslice = &message[match_header.len() + 1..message.len() - 1];
-                        decode(subslice, result_map);
-                    }
-                },
-                LinkedHashMap::new(),
+                |_ts, message, reply| reply.parse(message),
+                SysexReply::new(),
             )?))
         } else {
             Err(Box::new(DeviceError::NoInputPort {
@@ -228,39 +213,14 @@ impl Device {
         }
     }
 
-    pub fn query(&mut self, params: &[Token]) -> Result<Vec<String>> {
-        let header = [
-            self.schema.vendor.sysex.as_slice(),
-            self.schema.sysex.as_slice(),
-        ]
-        .concat();
-
-        fn decode(msg: &[u8], state: &mut SysexTree) {}
-
-        let sysex_replies = self.sysex_receiver(header, decode)?;
-        match param.index() {
-            Some(idx) => {
-                //0x01 MSGID(u8) 0x03,0x3b(SEQ) SEQ_IDX(u8 0 - 7) 0x00 SEQ_OFFSET(u8) SEQ_LEN(0x20)
-                self.midi_connection.send(&sysex(
-                    MICROBRUTE,
-                    &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x00, 0x20]],
-                ))?;
-                self.msg_id += 1;
-                self.midi_connection.send(&sysex(
-                    MICROBRUTE,
-                    &[&[0x01, self.msg_id as u8], query_code, &[idx, 0x20, 0x20]],
-                ))?;
-                self.msg_id += 1;
-            }
-            None => {
-                self.midi_connection.send(&sysex(
-                    MICROBRUTE,
-                    &[&[0x01, self.msg_id as u8], query_code],
-                ))?;
-                self.msg_id += 1;
-            }
+    pub fn query(&mut self, root: &AST) -> Result<String> {
+        let receiver = self.sysex_receiver()?;
+        let messages = root.to_sysex(&mut self.msg_id);
+        for msg in messages {
+            self.midi_connection.send(&msg)?
         }
-        Ok(sysex_replies.close_wait(500))
+        let reply = receiver.close_wait(500);
+        Ok(/* TODO print reply AST*/ "".to_owned())
     }
 
     pub fn update(&mut self, tokens: &[Token]) -> Result<()> {
@@ -274,3 +234,10 @@ impl Device {
     }
 }
 
+fn sysex(root: &AST) -> Vec<u8> {
+    let mut buffer = Vec::with_capacity(64);
+    buffer.push(0xf0);
+    root.to_sysex(&mut buffer);
+    buffer.push(0xf7);
+    buffer
+}
