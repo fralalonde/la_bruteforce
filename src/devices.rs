@@ -223,7 +223,7 @@ impl Device {
         Ok(/* TODO print reply AST*/ "".to_owned())
     }
 
-    pub fn update(&mut self, tokens: &[Token]) -> Result<()> {
+    pub fn update(&mut self, root: &AST) -> Result<()> {
         // convert values by mode?>field?>bounds
 
         // check that all fields filled out
