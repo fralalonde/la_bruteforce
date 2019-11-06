@@ -22,3 +22,5 @@ lazy_static = "1"
 serde =  { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
 
+typed-arena = "1.7.0"
+indextree = "4.0.0"

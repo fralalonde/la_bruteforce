@@ -1,15 +1,44 @@
 pub type Sysex = Vec<u8>;
 
-use serde::{Deserialize, Serialize};
 
 use crate::devices;
-use crate::devices::{DeviceError, DevicePort, Result, CLIENT_NAME};
+use crate::devices::{DeviceError, DevicePort, CLIENT_NAME};
+
+use serde::{Deserialize, Serialize};
 use linked_hash_map::LinkedHashMap;
 use midir::MidiOutput;
 use std::fmt;
 use std::str::FromStr;
 use std::fmt::Display;
-use crate::parse::ParseError;
+use snafu::Snafu;
+use strum::{IntoEnumIterator, ParseError};
+use std::num::ParseIntError;
+use std::ops::Deref;
+
+type Result<T> = ::std::result::Result<T, SchemaError>;
+
+#[derive(Debug, Snafu)]
+pub enum SchemaError {
+    BadNoteSyntax
+}
+
+impl From<serde_yaml::Error> for SchemaError {
+    fn from(_: serde_yaml::Error) -> Self {
+        unimplemented!()
+    }
+}
+
+impl From<strum::ParseError> for SchemaError {
+    fn from(_: ParseError) -> Self {
+        unimplemented!()
+    }
+}
+
+impl From<std::num::ParseIntError> for SchemaError {
+    fn from(_: ParseIntError) -> Self {
+        unimplemented!()
+    }
+}
 
 lazy_static! {
     pub static ref VENDORS: LinkedHashMap<String, Vendor> = load_vendors();
@@ -23,7 +52,7 @@ fn load_vendors() -> LinkedHashMap<String, Vendor> {
     map
 }
 
-fn load_devices() -> LinkedHashMap<String, &'static Device> {
+fn load_devices() -> LinkedHashMap<String, (&'static Vendor, &'static Device)> {
     let mut map = LinkedHashMap::new();
     for v in VENDORS.values() {
         for dev in &v.devices {
@@ -122,9 +151,23 @@ pub struct MidiNotes {
     pub offset: Option<i16>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct MidiNote {
     pub note: u8,
+}
+
+impl MidiNote {
+    fn with_offset(value: u8, offset: i16) -> Self {
+        MidiNote{note: (value as i16 + offset) as u8}
+    }
+}
+
+impl Deref for MidiNote {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.note
+    }
 }
 
 impl fmt::Display for MidiNote {
@@ -150,7 +193,7 @@ impl fmt::Display for MidiNote {
 }
 
 #[derive(Debug, EnumString, IntoStaticStr, EnumIter, AsRefStr, Clone, Copy)]
-enum NoteName {
+pub enum NoteName {
     C = 0,
     D = 2,
     E = 4,
@@ -161,18 +204,18 @@ enum NoteName {
 }
 
 impl FromStr for MidiNote {
-    type Err = ParseError;
+    type Err = SchemaError;
 
     fn from_str(s: &str) -> ::std::result::Result<Self, Self::Err> {
-        let mut iter = s.chars();
-        let mut item = iter.next();
+        let mut chars = s.chars();
+        let mut item = chars.next();
         if let Some(n) = item {
             let mut note = NoteName::from_str(&n.to_string())? as u8;
-            item = iter.next();
+            item = chars.next();
             if let Some(sharp) = item {
                 if sharp == '#' {
                     note = note + 1;
-                    item = iter.next();
+                    item = chars.next();
                 }
             }
             let octave = match item {
@@ -180,10 +223,12 @@ impl FromStr for MidiNote {
                 None => 0,
             };
             // C0 starts at 12
-            Some(MidiNote {
+            Ok(MidiNote {
                 note: octave * 12 + note + 12,
             })
-        }.ok_or(ParseError::BadNoteSyntax)?
+        } else {
+            Err(SchemaError::BadNoteSyntax)
+        }
     }
 }
 

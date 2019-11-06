@@ -65,7 +65,7 @@ enum Cmd {
     },
 }
 
-fn main() -> devices::Result<()> {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cmd = Cmd::from_args();
 
     match cmd {
@@ -82,13 +82,13 @@ fn main() -> devices::Result<()> {
             let (vendor, dev) = schema::DEVICES
                 .get(&device_name)
                 .ok_or(DeviceError::UnknownDevice { device_name })?;
-            if let Some(controls) = dev.controls {
+            if let Some(controls) = &dev.controls {
                 for control in controls {
                     print!("{}", control.name);
                     println!()
                 }
             }
-            if let Some(controls) = dev.indexed_controls {
+            if let Some(controls) = &dev.indexed_controls {
                 for control in controls {
                     print!("{}", control.name);
                     print!("/[{}..{}]", control.index.lo, control.index.hi);
@@ -128,9 +128,8 @@ fn main() -> devices::Result<()> {
             mut key_and_value,
         } => {
             let root = parse::parse_update(&device_name, &mut key_and_value)?;
-            let (device, index) = *root.walk()
-                .find_map(|token| if let Token::Device(d, idx) = token {Some((d, idx))} else {None})
-                .ok_or(ParseError::MissingDevice);
+            let (device, index) = root.find_map(& |token| if let Token::Device(d, idx) = token {Some((*d, *idx))} else {None})
+                .ok_or(ParseError::MissingDevice)?;
             let mut dev = devices::locate(device, index)?.connect()?;
             dev.update(&root)?;
         }
@@ -139,9 +138,8 @@ fn main() -> devices::Result<()> {
             mut param_keys,
         } => {
             let root = parse::parse_query(&device_name, param_keys.as_mut_slice())?;
-            let (device, index) = *root.walk()
-                .find_map(|token| if let Token::Device(d, idx) = token {Some((d, idx))} else {None})
-                .ok_or(ParseError::MissingDevice);
+            let (device, index) = root.find_map(& |token| if let Token::Device(d, idx) = token {Some((*d, *idx))} else {None})
+                .ok_or(ParseError::MissingDevice)?;
             let mut dev = devices::locate(device, index)?.connect()?;
 
             let results = dev.query(&root)?;
