@@ -14,29 +14,21 @@ use snafu::Snafu;
 use strum::{IntoEnumIterator, ParseError};
 use std::num::ParseIntError;
 use std::ops::Deref;
+use snafu::ResultExt;
 
 type Result<T> = ::std::result::Result<T, SchemaError>;
 
 #[derive(Debug, Snafu)]
 pub enum SchemaError {
-    BadNoteSyntax
-}
-
-impl From<serde_yaml::Error> for SchemaError {
-    fn from(_: serde_yaml::Error) -> Self {
-        unimplemented!()
-    }
-}
-
-impl From<strum::ParseError> for SchemaError {
-    fn from(_: ParseError) -> Self {
-        unimplemented!()
-    }
-}
-
-impl From<std::num::ParseIntError> for SchemaError {
-    fn from(_: ParseIntError) -> Self {
-        unimplemented!()
+    BadNoteSyntax,
+    SerdeYamlError {
+        source: serde_yaml::Error
+    },
+    EnumParseError {
+        source: strum::ParseError
+    },
+    IntParseError {
+        source: std::num::ParseIntError
     }
 }
 
@@ -63,7 +55,7 @@ fn load_devices() -> LinkedHashMap<String, (&'static Vendor, &'static Device)> {
 }
 
 fn parse_vendor(body: &str) -> Result<Vendor> {
-    Ok(serde_yaml::from_str(body)?)
+    Ok(serde_yaml::from_str(body).context(SerdeYamlError)?)
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -76,7 +68,6 @@ pub struct Vendor {
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Device {
     pub name: String,
-    pub vendor: Vendor,
     pub port_prefix: String,
     pub sysex: Sysex,
 
@@ -210,7 +201,7 @@ impl FromStr for MidiNote {
         let mut chars = s.chars();
         let mut item = chars.next();
         if let Some(n) = item {
-            let mut note = NoteName::from_str(&n.to_string())? as u8;
+            let mut note = NoteName::from_str(&n.to_string()).context(EnumParseError)? as u8;
             item = chars.next();
             if let Some(sharp) = item {
                 if sharp == '#' {
@@ -219,7 +210,7 @@ impl FromStr for MidiNote {
                 }
             }
             let octave = match item {
-                Some(oct) => u8::from_str(&oct.to_string())?,
+                Some(oct) => u8::from_str(&oct.to_string()).context(IntParseError)?,
                 None => 0,
             };
             // C0 starts at 12

@@ -17,7 +17,9 @@ pub enum ParseError {
     Unexpected,
     UnknownVendor,
     UnknownDevice,
-    UnknownControl,
+    UnknownControl {
+        text: String
+    },
     NoMatchingBounds,
     ShortRead,
     EmptyMessage,
@@ -25,30 +27,15 @@ pub enum ParseError {
     MissingDevice,
     MissingControl,
     MissingControlName,
-    BadControlSyntax,
+    BadControlSyntax{
+        text: String
+    },
     BadControlIndex,
     MissingValue,
     BadNoteSyntax,
     ExtraneousChars,
 }
 
-// TODO SNAFUize this
-impl From<std::num::ParseIntError> for ParseError {
-    fn from(_: ParseIntError) -> Self {
-        unimplemented!()
-    }
-}
-
-impl <T> From<std::result::Result<T, parse::ParseError>> for ParseError {
-    fn from(_: std::result::Result<T, ParseError>) -> Self {
-        unimplemented!()
-    }
-}
-
-#[derive(Debug, Snafu)]
-pub enum WriteError {
-
-}
 
 #[derive(Debug, Clone)]
 pub enum Token {
@@ -267,7 +254,7 @@ impl  SysexReply {
 
         // TODO indexed modal controls
 
-        Err(ParseError::UnknownControl)
+        Err(ParseError::UnknownControl{text: hex::encode(message)})
     }
 
     fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], message: &mut [u8]) -> Result<()> {
@@ -419,20 +406,20 @@ impl  TextParser {
             (1, 1) => {
                 let control = device.controls.iter().flatten()
                     .find(|c| c.name.eq(cname))
-                    .ok_or(ParseError::UnknownControl)?;
+                    .ok_or(ParseError::UnknownControl{text: cname.to_string()})?;
                 Ok((Token::Control(control), &control.bounds))
             },
             (2, 1) => {
                 let control = device.indexed_controls.iter().flatten()
                     .find(|c| c.name.eq(cname))
-                    .ok_or(ParseError::UnknownControl)?;
+                    .ok_or(ParseError::UnknownControl{text: cname.to_string()})?;
                 let idx = u8::from_str(seq_parts.get(1).unwrap()).map_err(|err| ParseError::BadControlIndex)?;
                 Ok((Token::IndexedControl(control, idx), &control.bounds))
             },
             // TODO
 //            (1, 2) => modal control
 //            (2, 2) => modal indexed control
-            _ => Err(ParseError::BadControlSyntax)
+            _ => Err(ParseError::BadControlSyntax{text: cname.to_string()})
         }?;
 
         let d_node = self.ast.push_child(node, ctoken);

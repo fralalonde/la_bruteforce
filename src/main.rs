@@ -128,9 +128,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             mut key_and_value,
         } => {
             let root = parse::parse_update(&device_name, &mut key_and_value)?;
+            let vendor = root.find_map(& |token| if let Token::Vendor(v) = token {Some(*v)} else {None})
+                .ok_or(ParseError::UnknownVendor)?;
             let (device, index) = root.find_map(& |token| if let Token::Device(d, idx) = token {Some((*d, *idx))} else {None})
                 .ok_or(ParseError::MissingDevice)?;
-            let mut dev = devices::locate(device, index)?.connect()?;
+            let mut dev = devices::locate(vendor, device, index)?.connect()?;
             dev.update(&root)?;
         }
         Cmd::Get {
@@ -138,9 +140,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             mut param_keys,
         } => {
             let root = parse::parse_query(&device_name, param_keys.as_mut_slice())?;
+            let vendor = root.find_map(& |token| if let Token::Vendor(v) = token {Some(*v)} else {None})
+                .ok_or(ParseError::UnknownVendor)?;
             let (device, index) = root.find_map(& |token| if let Token::Device(d, idx) = token {Some((*d, *idx))} else {None})
                 .ok_or(ParseError::MissingDevice)?;
-            let mut dev = devices::locate(device, index)?.connect()?;
+            let mut dev = devices::locate(vendor, device, index)?.connect()?;
 
             let results = dev.query(&root)?;
 

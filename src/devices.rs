@@ -1,6 +1,6 @@
 use std::iter::Iterator;
 
-use midir::{MidiInput, MidiInputConnection, InitError, ConnectError, SendError};
+use midir::{MidiInput, MidiInputConnection};
 use midir::{MidiOutput, MidiOutputConnection};
 
 use snafu::Snafu;
@@ -18,7 +18,8 @@ use linked_hash_map::LinkedHashMap;
 use std::error::Error;
 use strum::IntoEnumIterator;
 use crate::schema::MidiNote;
-use crate::parse::{Token, SysexReply, AST, WriteError, ParseError};
+use crate::parse::{Token, SysexReply, AST};
+use snafu::ResultExt;
 
 pub const CLIENT_NAME: &str = "LaBruteForce";
 
@@ -34,22 +35,6 @@ pub enum DeviceError {
     UnknownDevice {
         device_name: String,
     },
-    UnknownParameter {
-        param_name: String,
-    },
-    BadFormatParameter {
-        param_name: String,
-    },
-    BadIndexParameter {
-        param_name: String,
-    },
-    BadModeParameter {
-        param_name: String,
-    },
-    EmptyParameter,
-    UnknownValue {
-        value_name: String,
-    },
     NoConnectedDevice {
         device_name: String,
     },
@@ -59,21 +44,7 @@ pub enum DeviceError {
     NoInputPort {
         port_name: String,
     },
-    BadField {
-        field_name: String,
-    },
-    BadSchema {
-        field_name: String,
-    },
-    NoBounds,
-    InvalidParam {
-        device_name: String,
-        param_name: String,
-    },
     NoValueReceived,
-    ValueOutOfBound {
-        value_name: String,
-    },
     NoIdentificationReply,
     WrongId {
         id: Vec<u8>,
@@ -81,48 +52,21 @@ pub enum DeviceError {
     NoteParse {
         note: String,
     },
-    MissingValue {
-        param_name: String,
-    },
-    TooManyValues {
-        param_name: String,
-    },
     ReadSizeError,
-}
-
-impl From<midir::InitError> for DeviceError {
-    fn from(_: InitError) -> Self {
-        unimplemented!()
-    }
-}
-
-impl From<midir::ConnectError<midir::MidiOutput>> for DeviceError {
-    fn from(_: ConnectError<MidiOutput>) -> Self {
-        unimplemented!()
-    }
-}
-
-impl From<midir::SendError> for DeviceError {
-    fn from(_: SendError) -> Self {
-        unimplemented!()
-    }
-}
-
-impl From<midir::ConnectError<midir::MidiInput>> for DeviceError {
-    fn from(_: ConnectError<MidiInput>) -> Self {
-        unimplemented!()
-    }
-}
-
-impl From<parse::WriteError> for DeviceError {
-    fn from(_: WriteError) -> Self {
-        unimplemented!()
-    }
-}
-
-impl From<parse::ParseError> for DeviceError {
-    fn from(_: ParseError) -> Self {
-        unimplemented!()
+    OutputConnectError {
+        source: midir::ConnectError<MidiOutput>
+    },
+    InputConnectError {
+        source: midir::ConnectError<MidiInput>
+    },
+    MidiSendError {
+        source: midir::SendError
+    },
+    MidiInitError {
+        source: midir::InitError
+    },
+    ParseError {
+        source: parse::ParseError
     }
 }
 
@@ -133,16 +77,18 @@ pub struct MidiPort {
 }
 
 pub struct DevicePort {
-    pub schema: &'static schema::Device,
+    pub vendor: &'static schema::Vendor,
+    pub device: &'static schema::Device,
     pub client: MidiOutput,
     pub port: MidiPort,
 }
 
 impl DevicePort {
     pub fn connect(self) -> Result<devices::Device> {
-        let connection = self.client.connect(self.port.number, &self.port.name)?;
+        let connection = self.client.connect(self.port.number, &self.port.name).context(OutputConnectError)?;
         let mut device = Device {
-            schema: self.schema,
+            vendor: self.vendor,
+            device: self.device,
             port: self.port,
             connection,
             msg_id: 0,
@@ -186,25 +132,27 @@ pub enum DeviceType {
 }
 
 pub struct Device {
-    pub schema:  &'static schema::Device,
+    pub vendor:  &'static schema::Vendor,
+    pub device:  &'static schema::Device,
     pub port: MidiPort,
     connection: MidiOutputConnection,
     msg_id: usize,
 }
 
-pub fn locate(dev: &'static schema::Device, _index: u8) -> Result<DevicePort> {
+pub fn locate(vendor: &'static schema::Vendor, device: &'static schema::Device, _index: u8) -> Result<DevicePort> {
     // TODO support index for multiple devices of same model
     let client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
     Ok(devices::output_ports(&client)
         .into_iter()
-        .find(|port| port.name.starts_with(&dev.port_prefix))
+        .find(|port| port.name.starts_with(&device.port_prefix))
         .map(|port| devices::DevicePort {
-            schema: dev,
+            vendor,
+            device,
             client,
             port,
         })
         .ok_or(DeviceError::NoConnectedDevice {
-            device_name: dev.name.clone(),
+            device_name: device.name.clone(),
         })?)
 }
 
@@ -214,13 +162,13 @@ impl Device {
         static ID_KEY: &str = "ID";
 
         let header = [
-            self.schema.vendor.sysex.as_slice(),
-            self.schema.sysex.as_slice(),
+            self.vendor.sysex.as_slice(),
+            self.device.sysex.as_slice(),
         ]
         .concat();
         let sysex_replies = self.sysex_receiver()?;
         self.connection
-            .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
+            .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7]).context(MidiSendError)?;
         self.msg_id += 1;
 
         // TODO match vendor & device tokens
@@ -232,14 +180,14 @@ impl Device {
     }
 
     pub fn sysex_receiver(&self) -> Result<SysexReceiver> {
-        let midi_in = MidiInput::new(CLIENT_NAME)?;
+        let midi_in = MidiInput::new(CLIENT_NAME).context(MidiInitError)?;
         if let Some(in_port) = matching_input_port(&midi_in, &self.port.name) {
             Ok(SysexReceiver(midi_in.connect(
                 in_port.number,
                 "Query Results",
                 |_ts, message, reply| {reply.parse(message).map_err(|err| eprintln!("{:?}", err));},
                 SysexReply::new(),
-            )?))
+            ).context(InputConnectError)?))
         } else {
             Err(DeviceError::NoInputPort {
                 port_name: self.port.name.clone(),
@@ -249,9 +197,9 @@ impl Device {
 
     pub fn query(&mut self, root: &AST) -> Result<String> {
         let receiver = self.sysex_receiver()?;
-        let messages = root.to_sysex(&mut self.msg_id)?;
+        let messages = root.to_sysex(&mut self.msg_id).context(ParseError)?;
         for msg in messages {
-            self.connection.send(&msg)?
+            self.connection.send(&msg).context(MidiSendError)?
         }
         let reply = receiver.close_wait(500);
         Ok(/* TODO print reply AST*/ "".to_owned())
