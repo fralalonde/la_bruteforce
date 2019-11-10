@@ -1,7 +1,6 @@
 name: Arturia
 sysex: [0x00, 0x20, 0x6b]
 devices:
-  ####
   - name: MicroBrute
     port_prefix: MicroBrute
     sysex: [0x04]
@@ -19,98 +18,130 @@ devices:
       Value:
         offset: 8
         length: 1
-    parameters:
-      Seq:
+    controls:
+      - name: Seq
         range:
           lo: 1
           hi: 8
           offset: 1
         sysex: [0x23, 0x3a]
         bounds:
-          - max_len: 64
+          - type: MidiNotes
+            max_len: 64
             offset: 24
-      MidiRxChan:
+      - name: MidiRxChan
         sysex: [0x01, 0x05]
         bounds:
           - lo: 1
             hi: 16
             offset: 1
-          - All: 0x10
-      MidiTxChan:
+          - name: All
+            sysex: 0x10
+      - name: MidiTxChan
         sysex: [0x01, 0x07]
         bounds:
           - lo: 1
             hi: 16
             offset: 1
-      KeyNotePriority:
+      - name: KeyNotePriority
         sysex: [0x01, 0x0b]
         bounds:
-          - LastNote: 0
-            LowNote: 1
-            HighNote: 2
-      KeyVelocityResponse:
+          - name: LastNote
+            sysex: 0
+          - name: LowNote
+            sysex: 1
+          - name: HighNote
+            sysex: 2
+      - name: KeyVelocityResponse
         sysex: [0x01, 0x11]
         bounds:
-          - Logarithmic: 0
-            Exponential: 1
-            Linear: 2
-      LfoKeyRetrig:
+          - name: Logarithmic
+            sysex: 0
+          - name: Exponential
+            sysex: 1
+          - name: Linear
+            sysex: 2
+      - name: LfoKeyRetrig
         sysex: [0x01, 0x0f]
         bounds:
-          - Off: 0
-            On: 1
-      EnvLegatoMode:
+          - name: Off
+            sysex: 0
+          - name: On
+            sysex: 1
+      - name: EnvLegatoMode
         sysex: [0x01, 0x0d]
         bounds:
-          - Off: 0x00
-            On: 0x01
-      BendRange:
+          - name: Off
+            sysex: 0x00
+          - name: On
+            sysex: 0x01
+      - name: BendRange
         sysex: [0x01, 0x2c]
         bounds:
           - lo: 1
             hi: 12
             offset: 1
-      Gate:
+      - name: Gate
         sysex: [0x01, 0x36]
         bounds:
-          - Short: 0
-            Medium: 1
-            Long: 2
-      Sync:
+          - name: Short
+            sysex: 0
+          - name: Medium
+            sysex: 1
+          - name: Long
+            sysex: 2
+      - name: Sync
         sysex: [0x01, 0x3c]
         bounds:
-          - Auto: 0
-            Internal: 1
-            External: 2
-      SeqPlay:
+          - name: Auto
+            sysex: 0
+          - name: Internal
+            sysex: 1
+          - name: External
+            sysex: 2
+      - name: SeqPlay
         sysex: [0x01, 0x2e]
         bounds:
-          - Hold: 0
-            NoteOn: 1
-      SeqKeyRetrig:
+          - name: Hold
+            sysex: 0
+          - name: NoteOn
+            sysex: 1
+      - name: SeqKeyRetrig
         sysex: [0x01, 0x34]
         bounds:
-          - Reset: 0x00
-            Legato: 0x01
-            None: 0x02
-      SeqNextSeq:
+          - name: Reset
+            sysex: 0x00
+          - name: Legato
+            sysex: 0x01
+          - name: None
+            sysex: 0x02
+      - name: SeqNextSeq
         sysex: [0x01, 0x32]
         bounds:
-          - End: 0x00
-            Reset: 0x01
-            Continue: 0x02
-      SeqStep:
+          - name: End
+            sysex: 0x00
+          - name: Reset
+            sysex: 0x01
+          - name: Continue
+            sysex: 0x02
+      - name: SeqStep
         sysex: [0x01, 0x38]
         bounds:
-          - 1/4: 0x04
-            1/8: 0x08
-            1/16: 0x10
-            1/32: 0x20
-      SeqStepOn:
+          - name: 1/4
+            sysex: 0x04
+          - name: 1/8
+            sysex: 0x08
+          - name: 1/16
+            sysex: 0x10
+          - name: 1/32
+            sysex: 0x20
+      - name: SeqStepOn
         sysex: [0x01, 0x2a]
         bounds:
-          - Clock: 0x00
-            Gate: 0x01
+          - name: Clock
+            sysex: 0x00
+          - name: Gate
+            sysex: 0x01
 
   ####
 #    - name: BeatStep

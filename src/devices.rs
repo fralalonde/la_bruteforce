@@ -185,7 +185,11 @@ impl Device {
             Ok(SysexReceiver(midi_in.connect(
                 in_port.number,
                 "Query Results",
-                |_ts, message, reply| {reply.parse(message).map_err(|err| eprintln!("{:?}", err));},
+                |_ts, message, reply| {
+                    if message.starts_with(parse::SYSEX_BEGIN) {
+                        reply.parse(message).map_err(|err| eprintln!("{:?}", err));
+                    }
+                },
                 SysexReply::new(),
             ).context(InputConnectError)?))
         } else {

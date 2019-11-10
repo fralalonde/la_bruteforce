@@ -39,6 +39,8 @@ lazy_static! {
 
 fn load_vendors() -> LinkedHashMap<String, Vendor> {
     let mut map = LinkedHashMap::new();
+    let vendor = parse_vendor(include_str!("Universal.yaml")).expect("Universal not loaded");
+    map.insert(vendor.name.clone(), vendor);
     let vendor = parse_vendor(include_str!("Arturia.yaml")).expect("Arturia not loaded");
     map.insert(vendor.name.clone(), vendor);
     map
@@ -110,11 +112,11 @@ pub struct Field {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-//#[serde(tag = "type")] /*maybe we can get away without*/
+//#[serde(tag = "type")]
 #[serde(untagged)]
 pub enum Bounds {
     /// Name / Value pair
-    Values(Vec<Value>),
+    Value(Value),
 
     /// Raw value offset and display value bounds (Low to High, inclusive)
     Range(Range),

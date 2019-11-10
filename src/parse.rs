@@ -14,7 +14,9 @@ type Result<T> = ::std::result::Result<T, ParseError>;
 
 #[derive(Debug, Snafu)]
 pub enum ParseError {
-    Unexpected,
+    Expected {
+        bytes: String
+    },
     UnknownVendor,
     UnknownDevice,
     UnknownControl {
@@ -76,8 +78,8 @@ impl Into<Vec<u8>> for Buffer {
     }
 }
 
-const SYSEX_BEGIN: &[u8] = &[0xf0];
-const SYSEX_END: &[u8] = &[0xf7];
+pub const SYSEX_BEGIN: &[u8] = &[0xf0];
+pub const SYSEX_END: &[u8] = &[0xf7];
 
 impl Token {
     pub fn to_sysex(&self, buffer: &mut Buffer) {
@@ -179,6 +181,49 @@ impl AST {
     }
 }
 
+struct PCTX<'a> {
+    message: &'a [u8],
+    pos: usize,
+}
+
+impl <'a> PCTX<'a> {
+    fn accept(&mut self, token: &[u8]) -> bool {
+        if self.message[self.pos..].starts_with(token) {
+            self.pos += token.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect(&mut self, token: &[u8]) -> Result<()> {
+        if self.accept(token) {
+            Ok(())
+        } else {
+            Err(ParseError::Expected {bytes: hex::encode(token)})
+        }
+    }
+
+    fn take(&mut self, length: usize) -> Result<Vec<u8>> {
+        let slice = &self.message[self.pos..];
+        if slice.len() < length {
+            return Err(ParseError::ShortRead)
+        };
+        self.pos += length;
+        Ok(slice.to_vec())
+    }
+
+    fn next_byte(&mut self) -> Result<u8> {
+        if self.pos >= self.message.len() {
+            return Err(ParseError::ShortRead)
+        }
+        let z = self.message[self.pos];
+        self.pos += 1;
+        Ok(z)
+    }
+
+}
+
 #[derive(Debug)]
 pub struct SysexReply {
     ast: AST,
@@ -197,11 +242,9 @@ impl  SysexReply {
         if message.is_empty() {
             return Err(ParseError::EmptyMessage);
         }
-        // TODO find a way to not copy the message
-        let message = &mut message.to_vec();
-        self.expect(SYSEX_BEGIN, message)?;
-        self.vendor(self.ast.root, message)?;
-        // SYSEX_END expected by leaf nodes
+        let mut message = PCTX{message, pos:0};
+        message.expect(SYSEX_BEGIN)?;
+        self.vendor(self.ast.root, &mut message)?;
         Ok(())
     }
 
@@ -209,9 +252,9 @@ impl  SysexReply {
         self.ast
     }
 
-    fn vendor(&mut self, node: NodeId, message: &mut [u8]) -> Result<()> {
+    fn vendor(&mut self, node: NodeId, message: &mut PCTX) -> Result<()> {
         for v_schema in schema::VENDORS.values() {
-            if self.accept(&v_schema.sysex, message) {
+            if message.accept(&v_schema.sysex) {
                 let v_node = self.ast.push_child(node, Token::Vendor(v_schema));
                 return self.device(v_node, v_schema, message);
             }
@@ -219,12 +262,12 @@ impl  SysexReply {
         Err(ParseError::UnknownVendor)
     }
 
-    fn device(&mut self, node: NodeId, vendor: &'static schema::Vendor, message: &mut [u8]) -> Result<()> {
+    fn device(&mut self, node: NodeId, vendor: &'static schema::Vendor, message: &mut PCTX) -> Result<()> {
         for d_schema in &vendor.devices {
-            if self.accept(&d_schema.sysex, message) {
-                let sysex_id = self.next_byte(message)?;
-                let _reply_id = self.next_byte(message)?;
-                let _unknown = self.next_byte(message)?; // 01 for regular param, 23 for sequences
+            if message.accept(&d_schema.sysex) {
+                let sysex_id = message.next_byte()?;
+                let _reply_id = message.next_byte()?;
+                let _unknown = message.next_byte()?; // 01 for regular param, 23 for sequences
                 let d_node = self.ast.push_child(node, Token::Device(d_schema, sysex_id));
                 return self.control(d_node, d_schema, message);
             }
@@ -232,10 +275,10 @@ impl  SysexReply {
         Err(ParseError::UnknownDevice)
     }
 
-    fn control(&mut self, node: NodeId, device: &'static schema::Device, message: &mut [u8]) -> Result<()> {
+    fn control(&mut self, node: NodeId, device: &'static schema::Device, message: &mut PCTX) -> Result<()> {
         if let Some(controls) = &device.controls {
             for c_schema in controls {
-                if self.accept(&c_schema.sysex, message) {
+                if message.accept(&c_schema.sysex) {
                     let c_node = self.ast.push_child(node, Token::Control(c_schema));
                     return self.bounds(c_node, &c_schema.bounds, message);
                 }
@@ -243,9 +286,9 @@ impl  SysexReply {
         }
         if let Some(controls) = &device.indexed_controls {
             for ic_schema in controls {
-                if self.accept(&ic_schema.sysex, message) {
+                if message.accept(&ic_schema.sysex) {
                     // could decompose into index() if other tokens need it e.g. device
-                    let index = self.next_byte(message)?;
+                    let index = message.next_byte()?;
                     let ic_node = self.ast.push_child(node, Token::IndexedControl(ic_schema, index));
                     return self.bounds(ic_node, &ic_schema.bounds, message);
                 }
@@ -254,17 +297,17 @@ impl  SysexReply {
 
         // TODO indexed modal controls
 
-        Err(ParseError::UnknownControl{text: hex::encode(message)})
+        Err(ParseError::UnknownControl{text: hex::encode(message.message)})
     }
 
-    fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], message: &mut [u8]) -> Result<()> {
+    fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], message: &mut PCTX) -> Result<()> {
         for b_schema in bounds {
             let check = match b_schema {
-                schema::Bounds::Values(values) => self.values(values, message),
+                schema::Bounds::Value(values) => self.values(values, message),
                 schema::Bounds::Range(range) => self.in_range(range, message),
                 schema::Bounds::MidiNotes(seq) => {
-                    let start_offset = self.next_byte(message)?;
-                    let seq_length = self.next_byte(message)? as usize;
+                    let start_offset = message.next_byte()?;
+                    let seq_length = message.next_byte()? as usize;
                     self.note_seq(start_offset, seq_length, seq, message)
                 },
             };
@@ -276,21 +319,19 @@ impl  SysexReply {
         Err(ParseError::NoMatchingBounds)
     }
 
-    fn values(&mut self, values: &'static [schema::Value], message: &mut [u8]) -> Option<Token> {
-        self.next_byte(message).
+    fn values(&mut self, value: &'static schema::Value, message: &mut PCTX) -> Option<Token> {
+        message.next_byte().
             ok()
-            .and_then(|value| {
-                for v in values {
-                    if v.sysex.eq(&value) {
-                        return Some(Token::Value(v));
-                    }
+            .and_then(|v| {
+                if v.eq(&value.sysex) {
+                    return Some(Token::Value(value));
                 }
                 None
             })
     }
 
-    fn in_range(&mut self, range: &'static schema::Range, message: &mut [u8]) -> Option<Token> {
-        self.next_byte(message).ok()
+    fn in_range(&mut self, range: &'static schema::Range, message: &mut PCTX) -> Option<Token> {
+        message.next_byte().ok()
             .and_then(|value| {
                 let mut value = value as isize;
                 if value >= range.lo && value <= range.hi {
@@ -304,9 +345,9 @@ impl  SysexReply {
         )
     }
 
-    fn note_seq(&mut self, start_offset: u8, seq_length: usize, range: &'static schema::MidiNotes, message: &mut [u8]) -> Option<Token> {
+    fn note_seq(&mut self, start_offset: u8, seq_length: usize, range: &'static schema::MidiNotes, message: &mut PCTX) -> Option<Token> {
         let pitch_offset = range.offset.unwrap_or(0);
-        if let Ok(deez_notez) = self.take(seq_length, message) {
+        if let Ok(deez_notez) = message.take(seq_length) {
             let mut notes = vec![];
             for z in deez_notez {
                 notes.push(MidiNote{note: (z as i16 + pitch_offset) as u8})
@@ -316,37 +357,37 @@ impl  SysexReply {
         None
     }
 
-    fn accept(&mut self, value: &[u8], mut message: &mut [u8]) -> bool {
-        if let Ok(token) = self.take(value.len(), message) {
-            if token.eq(&value) {
-                message = &mut message[value.len()..];
-                return true;
-            }
-        }
-        false
-    }
-
-    fn take(&mut self, length: usize, message: &mut [u8]) -> Result<Vec<u8>> {
-        if message.is_empty() {
-            return Err(ParseError::ShortRead)
-        };
-        let (a, _message) = message.split_at_mut(length);
-        Ok(a.to_vec())
-    }
-
-    fn next_byte(&mut self, message: &mut [u8]) -> Result<u8> {
-        let (z, _message) = message.split_first_mut().ok_or(ParseError::ShortRead)?;
-        Ok(*z)
-    }
-
-
-    fn expect(&mut self, value: &[u8], message: &mut [u8]) -> Result<()> {
-        if self.accept(value, message) {
-            Ok(())
-        } else {
-            Err(ParseError::Unexpected)
-        }
-    }
+//    fn accept(&mut self, value: &[u8], mut message: &mut [u8]) -> bool {
+//        if let Ok(token) = self.take(value.len(), message) {
+//            if token.eq(&value) {
+//                message = &mut message[value.len()..];
+//                return true;
+//            }
+//        }
+//        false
+//    }
+//
+//    fn take(&mut self, length: usize, message: &mut [u8]) -> Result<Vec<u8>> {
+//        if message.is_empty() {
+//            return Err(ParseError::ShortRead)
+//        };
+//        let (a, _message) = message.split_at_mut(length);
+//        Ok(a.to_vec())
+//    }
+//
+//    fn next_byte(&mut self, message: &mut [u8]) -> Result<u8> {
+//        let (z, _message) = message.split_first_mut().ok_or(ParseError::ShortRead)?;
+//        Ok(*z)
+//    }
+//
+//
+//    fn expect(&mut self, value: &[u8], message: &mut [u8]) -> Result<()> {
+//        if self.accept(value, message) {
+//            Ok(())
+//        } else {
+//            Err(ParseError::Expected{ bytes: hex::encode(value)})
+//        }
+//    }
 }
 
 pub fn parse_query(device: &str, items: &mut [String]) -> Result<AST> {
@@ -437,7 +478,7 @@ impl  TextParser {
         let (value, mut _items) = items.split_first_mut().ok_or(ParseError::MissingValue)?;
         for b in bounds {
             let check = match b {
-                schema::Bounds::Values(values) => self.values(values, value),
+                schema::Bounds::Value(s_val) => self.values(s_val, value),
                 schema::Bounds::Range(range) => self.in_range(range, value),
                 schema::Bounds::MidiNotes(seq) => self.note_seq(seq, value),
             };
@@ -448,13 +489,12 @@ impl  TextParser {
         Err(ParseError::NoMatchingBounds)
     }
 
-    fn values(&mut self, values: &'static [schema::Value], input: &str) -> Option<Token> {
-        for v in values {
-            if v.name.eq(input) {
-                return Some(Token::Value(v));
-            }
+    fn values(&mut self, value: &'static schema::Value, input: &str) -> Option<Token> {
+        if value.name.eq(input) {
+            Some(Token::Value(value))
+        } else {
+            None
         }
-        None
     }
 
     fn in_range(&mut self, range: &'static schema::Range, input: &str) -> Option<Token> {
@@ -480,14 +520,6 @@ impl  TextParser {
         Some(Token::MidiNotes(range, 0, notes))
     }
 
-//    fn accept(&mut self, ident: &str, mut items: &mut [String]) -> bool {
-//        if input.starts_with(ident) {
-//            input = &mut input[ident.len()..];
-//            return true;
-//        }
-//        false
-//    }
-//
     fn take(&mut self, matching: &str, input: &mut str) -> Result<String> {
         let mut i = 0;
         let mut vh = input.chars();
@@ -498,12 +530,5 @@ impl  TextParser {
         let (z, input) = input.split_at_mut(i);
         Ok(z.to_string())
     }
-//
-//    fn expect(&mut self, ident: &str, items: &mut [String]) -> Result<AST> {
-//        if self.accept(ident, input) {
-//            Ok(())
-//        } else {
-//            Err(ParseError::Unexpected)
-//        }
-//    }
+
 }
