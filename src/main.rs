@@ -7,6 +7,7 @@ extern crate lazy_static;
 
 mod devices;
 mod schema;
+mod schema2;
 mod parse;
 
 use midir::MidiOutput;
@@ -91,7 +92,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             if let Some(controls) = &dev.indexed_controls {
                 for control in controls {
                     print!("{}", control.name);
-                    print!("/[{}..{}]", control.index.lo, control.index.hi);
+                    print!("/[{}..{}]", control.range.lo, control.range.hi);
                     println!()
                 }
             }

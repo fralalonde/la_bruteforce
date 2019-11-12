@@ -1,7 +1,8 @@
+
 use crate::devices;
 use crate::devices::{DeviceError, DevicePort, CLIENT_NAME};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer};
 use linked_hash_map::LinkedHashMap;
 use midir::MidiOutput;
 use std::fmt;
@@ -53,41 +54,81 @@ fn load_devices() -> LinkedHashMap<String, (&'static Vendor, &'static Device)> {
     map
 }
 
+pub enum Sysex {
+    Default(Option<Vec<u8>>),
+    Split{
+        update: Option<Vec<u8>>,
+        request: Option<Vec<u8>>,
+        reply: Option<Vec<u8>>
+    }
+}
+
+pub enum Operation {
+    Expect,
+    Accept,
+    Take(usize),
+}
+
+#[derive(Debug, PartialEq, Deserialize, Clone)]
+pub struct Node {
+    name: String,
+    sysex: Sysex,
+    operation: Operation,
+    emit: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Clone)]
+pub struct AnyOf {
+    #[serde(flatten)]
+    node: Node,
+    any_of: Vec<Box<Visit>>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Clone)]
+pub struct AllOf {
+    #[serde(flatten)]
+    node: Node,
+    all_of: Vec<Box<Visit>>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Clone)]
+pub struct OneOf {
+    #[serde(flatten)]
+    node: Node,
+    one_of: Vec<Box<Visit>>,
+}
+
+
+pub trait Context {
+    fn is_reply(&self) -> bool;
+
+}
+
+pub trait Visit {
+    fn visit(&self, context: &mut Context);
+}
+
+impl Visit for Node {
+    fn visit(&self, context: &mut Context) {
+        
+    }
+}
+
+//pub enum Operator {
+//    OneOf
+//    AnyOf
+//    SeqOf
+//}
+
 fn parse_vendor(body: &str) -> Result<Vendor> {
     Ok(serde_yaml::from_str(body).context(SerdeYamlError)?)
-}
-
-pub enum Sysex {
-    Unique(Vec<u8>),
-    Split{
-        request: Vec<u8>,
-        reply: Vec<u8>
-    }
-}
-
-impl Sysex {
-    fn as_slice(&self, request: bool) -> &[u8] {
-        match self {
-            Sysex::Unique(v) => &v,
-            Sysex::Split(request, reply) => if request {&request} else {&reply},
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Vendor {
     pub name: String,
     pub sysex: Vec<u8>,
-    #[serde(default)]
     pub devices: Vec<Device>,
-    #[serde(default)]
-    pub universals: Vec<Universal>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct Universal {
-    pub name: String,
-    pub sub_id: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -95,10 +136,9 @@ pub struct Device {
     pub name: String,
     pub port_prefix: String,
     pub sysex: Sysex,
-    #[serde(default)]
-    pub controls: Vec<Control>,
-    #[serde(default)]
-    pub indexed_controls: Vec<IndexedControl>,
+
+    pub controls: Option<Vec<Control>>,
+    pub indexed_controls: Option<Vec<IndexedControl>>,
 //    pub indexed_modal_controls: Option<Vec<Control>>,
 }
 

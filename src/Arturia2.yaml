@@ -1,12 +1,11 @@
 name: Arturia
+class: Vendor
 sysex: [0x00, 0x20, 0x6b]
-devices:
+nodes:
   - name: MicroBrute
     port_prefix: MicroBrute
-    sysex:
-      request: [0x05]
-      reply: [0x04]
-    indexed_controls:
+    sysex: [0x04]
+    nodes:
       - name: Seq
         range:
           lo: 1
@@ -17,7 +16,6 @@ devices:
           - type: MidiNotes
             max_len: 64
             offset: 24
-    controls:
       - name: MidiRxChan
         sysex: [0x01, 0x05]
         bounds:
