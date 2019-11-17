@@ -252,7 +252,7 @@ impl FromStr for MidiNote {
 
 #[cfg(test)]
 mod test {
-    use crate::schema::{parse_vendor, Device, Vendor};
+    use crate::schema2::{parse_vendor, Device, Vendor};
 
     #[test]
     fn test_parse() {

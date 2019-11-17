@@ -1,11 +1,11 @@
 use crate::devices::{DeviceError};
 use crate::parse::Token::{Value, Control, Vendor};
-use crate::{schema, parse};
+use crate::{schema2, parse};
 use std::collections::VecDeque;
 use snafu::*;
 use std::str::FromStr;
 use std::num::ParseIntError;
-use crate::schema::MidiNote;
+use crate::schema2::MidiNote;
 use std::ops::Deref;
 use std::cell::RefCell;
 use indextree::{Arena, NodeId, Node};
@@ -44,23 +44,23 @@ pub enum Token {
     /// Root of AST
     Sysex,
 
-    Vendor(&'static schema::Vendor),
-    Device(&'static schema::Device, u8),
+    Vendor(&'static schema2::Vendor),
+    Device(&'static schema2::Device, u8),
 
 //    not correlating replies, assuming they'll be ordered enough
 //    ReplyId(u8),
 
 //    Patch(usize),
 
-    Control(&'static schema::Control),
-    IndexedControl(&'static schema::IndexedControl, u8),
+    Control(&'static schema2::Node),
+//    IndexedControl(&'static schema2::IndexedControl, u8),
 
-    Mode(&'static schema::Value),
-    Field(&'static schema::Field),
+    Mode(&'static schema2::Value),
+//    Field(&'static schema2::Field),
 
-    Value(&'static schema::Value),
-    InRange(&'static schema::Range, isize),
-    MidiNotes(&'static schema::MidiNotes, u8, Vec<MidiNote>),
+    Value(&'static schema2::Value),
+    InRange(&'static schema2::Range, isize),
+    MidiNotes(&'static schema2::MidiNotes, u8, Vec<MidiNote>),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -95,10 +95,6 @@ impl Token {
                 buffer.head.push(*idx);
             },
             Token::Control(c) => buffer.head.extend_from_slice(&c.sysex),
-            Token::IndexedControl(c, idx) => {
-                buffer.head.extend_from_slice(&c.sysex);
-                buffer.head.push(*idx);
-            },
 
             Token::Mode(m) => buffer.head.push(m.sysex),
             Token::Field(f) => buffer.head.extend_from_slice(&f.sysex),
@@ -227,7 +223,7 @@ impl <'a> PCTX<'a> {
 #[derive(Debug)]
 pub struct SysexReply {
     ast: AST,
-    mode: Option<&'static schema::Value>,
+    mode: Option<&'static schema2::NodeType>,
 }
 
 impl  SysexReply {
@@ -253,7 +249,7 @@ impl  SysexReply {
     }
 
     fn vendor(&mut self, node: NodeId, pctx: &mut PCTX) -> Result<()> {
-        for v_schema in schema::VENDORS.values() {
+        for v_schema in schema2::VENDORS.values() {
             if pctx.accept(&v_schema.sysex) {
                 let v_node = self.ast.push_child(node, Token::Vendor(v_schema));
                 return self.device(v_node, v_schema, pctx);
@@ -262,7 +258,7 @@ impl  SysexReply {
         Err(ParseError::UnknownVendor)
     }
 
-    fn device(&mut self, node: NodeId, vendor: &'static schema::Vendor, pctx: &mut PCTX) -> Result<()> {
+    fn device(&mut self, node: NodeId, vendor: &'static schema2::Vendor, pctx: &mut PCTX) -> Result<()> {
         for d_schema in &vendor.devices {
             if pctx.accept(&d_schema.sysex) {
                 let sysex_id = pctx.next_byte()?;
@@ -275,22 +271,12 @@ impl  SysexReply {
         Err(ParseError::UnknownDevice)
     }
 
-    fn control(&mut self, node: NodeId, device: &'static schema::Device, pctx: &mut PCTX) -> Result<()> {
+    fn control(&mut self, node: NodeId, device: &'static schema2::Device, pctx: &mut PCTX) -> Result<()> {
         if let Some(controls) = &device.controls {
             for c_schema in controls {
                 if pctx.accept(&c_schema.sysex) {
                     let c_node = self.ast.push_child(node, Token::Control(c_schema));
                     return self.bounds(c_node, &c_schema.bounds, pctx);
-                }
-            }
-        }
-        if let Some(controls) = &device.indexed_controls {
-            for ic_schema in controls {
-                if pctx.accept(&ic_schema.sysex) {
-                    // could decompose into index() if other tokens need it e.g. device
-                    let index = pctx.next_byte()?;
-                    let ic_node = self.ast.push_child(node, Token::IndexedControl(ic_schema, index));
-                    return self.bounds(ic_node, &ic_schema.bounds, pctx);
                 }
             }
         }
@@ -300,12 +286,12 @@ impl  SysexReply {
         Err(ParseError::UnknownControl{text: hex::encode(pctx.message)})
     }
 
-    fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], pctx: &mut PCTX) -> Result<()> {
+    fn bounds(&mut self, node: NodeId, bounds: &'static [schema2::Bounds], pctx: &mut PCTX) -> Result<()> {
         for b_schema in bounds {
             let check = match b_schema {
-                schema::Bounds::Value(values) => self.values(values, pctx),
-                schema::Bounds::Range(range) => self.in_range(range, pctx),
-                schema::Bounds::MidiNotes(seq) => {
+                schema2::Bounds::Value(values) => self.values(values, pctx),
+                schema2::Bounds::Range(range) => self.in_range(range, pctx),
+                schema2::Bounds::MidiNotes(seq) => {
                     let start_offset = pctx.next_byte()?;
                     let seq_length = pctx.next_byte()? as usize;
                     self.note_seq(start_offset, seq_length, seq, pctx)
@@ -319,7 +305,7 @@ impl  SysexReply {
         Err(ParseError::NoMatchingBounds)
     }
 
-    fn values(&mut self, value: &'static schema::Value, pctx: &mut PCTX) -> Option<Token> {
+    fn values(&mut self, value: &'static schema2::Value, pctx: &mut PCTX) -> Option<Token> {
         pctx.next_byte().
             ok()
             .and_then(|v| {
@@ -330,7 +316,7 @@ impl  SysexReply {
             })
     }
 
-    fn in_range(&mut self, range: &'static schema::Range, pctx: &mut PCTX) -> Option<Token> {
+    fn in_range(&mut self, range: &'static schema2::Range, pctx: &mut PCTX) -> Option<Token> {
         pctx.next_byte().ok()
             .and_then(|value| {
                 let mut value = value as isize;
@@ -345,7 +331,7 @@ impl  SysexReply {
         )
     }
 
-    fn note_seq(&mut self, start_offset: u8, seq_length: usize, range: &'static schema::MidiNotes, message: &mut PCTX) -> Option<Token> {
+    fn note_seq(&mut self, start_offset: u8, seq_length: usize, range: &'static schema2::MidiNotes, message: &mut PCTX) -> Option<Token> {
         let pitch_offset = range.offset.unwrap_or(0);
         if let Ok(deez_notez) = message.take(seq_length) {
             let mut notes = vec![];
@@ -379,7 +365,7 @@ pub fn parse_update(device: &str, items: &mut [String]) -> Result<AST> {
 #[derive(Debug)]
 struct TextParser {
     ast: AST,
-    mode: Option<&'static schema::Value>,
+    mode: Option<&'static schema2::Value>,
     for_update: bool,
 }
 
@@ -397,7 +383,7 @@ impl  TextParser {
     }
 
     fn device(&mut self, node: NodeId, device: &str, items: &mut [String]) -> Result<()> {
-        if let Some((vendor, dev)) = schema::DEVICES.get(device) {
+        if let Some((vendor, dev)) = schema2::DEVICES.get(device) {
             let v_node = self.ast.push_child(node, Token::Vendor(vendor));
             let d_node = self.ast.push_child(v_node, Token::Device(dev, 1));
             self.control(d_node, dev, items)
@@ -406,20 +392,20 @@ impl  TextParser {
         }
     }
 
-    fn control(&mut self, node: NodeId, device: &'static schema::Device, items: &mut [String]) -> Result<()> {
+    fn control(&mut self, node: NodeId, device: &'static schema2::Device, items: &mut [String]) -> Result<()> {
         let (citem, mut items) = items.split_first_mut().ok_or(ParseError::MissingControl)?;
         let seq_parts: Vec<&str> = citem.split("/").collect();
         let cname = seq_parts.get(0).ok_or(ParseError::MissingControlName)?;
         let mut mode_parts: Vec<&str> = citem.split(":").collect();
         let (ctoken, bounds) = match (seq_parts.len(), mode_parts.len()) {
             (1, 1) => {
-                let control = device.controls.iter().flatten()
+                let control = device.one_of.iter().flatten()
                     .find(|c| c.name.eq(cname))
                     .ok_or(ParseError::UnknownControl{text: cname.to_string()})?;
                 Ok((Token::Control(control), &control.bounds))
             },
             (2, 1) => {
-                let control = device.indexed_controls.iter().flatten()
+                let control = device.one_of.iter().flatten()
                     .find(|c| c.name.eq(cname))
                     .ok_or(ParseError::UnknownControl{text: cname.to_string()})?;
                 let idx = u8::from_str(seq_parts.get(1).unwrap()).map_err(|err| ParseError::BadControlIndex)?;
@@ -442,13 +428,13 @@ impl  TextParser {
         }
     }
 
-    fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], items: &mut [String]) -> Result<()> {
+    fn bounds(&mut self, node: NodeId, bounds: &'static [schema2::Bounds], items: &mut [String]) -> Result<()> {
         let (value, mut _items) = items.split_first_mut().ok_or(ParseError::MissingValue)?;
         for b in bounds {
             let check = match b {
-                schema::Bounds::Value(s_val) => self.values(s_val, value),
-                schema::Bounds::Range(range) => self.in_range(range, value),
-                schema::Bounds::MidiNotes(seq) => self.note_seq(seq, value),
+                schema2::Bounds::Value(s_val) => self.values(s_val, value),
+                schema2::Bounds::Range(range) => self.in_range(range, value),
+                schema2::Bounds::MidiNotes(seq) => self.note_seq(seq, value),
             };
             if let Some(token) = check {
                 self.ast.push_child(node, token);
@@ -457,7 +443,7 @@ impl  TextParser {
         Err(ParseError::NoMatchingBounds)
     }
 
-    fn values(&mut self, value: &'static schema::Value, input: &str) -> Option<Token> {
+    fn values(&mut self, value: &'static schema2::Value, input: &str) -> Option<Token> {
         if value.name.eq(input) {
             Some(Token::Value(value))
         } else {
@@ -465,7 +451,7 @@ impl  TextParser {
         }
     }
 
-    fn in_range(&mut self, range: &'static schema::Range, input: &str) -> Option<Token> {
+    fn in_range(&mut self, range: &'static schema2::Range, input: &str) -> Option<Token> {
         let mut value = isize::from_str(&input).ok()?;
         if value >= range.lo && value <= range.hi {
             value += range.offset.unwrap_or(0);
@@ -474,7 +460,7 @@ impl  TextParser {
         None
     }
 
-    fn note_seq(&mut self, range: &'static schema::MidiNotes, input: &str) -> Option<Token> {
+    fn note_seq(&mut self, range: &'static schema2::MidiNotes, input: &str) -> Option<Token> {
         let mut nit = input.split(",");
         let mut notes = vec![];
         for n in nit {

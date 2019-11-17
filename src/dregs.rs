@@ -216,7 +216,7 @@ fn sequence(parse: &mut SysexReply) -> Result<(), ParseError> {
 }
 
 
-fn decode(schema: schema::Device, msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
+fn decode(schema: schema2::Device, msg: &[u8], result_map: &mut LinkedHashMap<String, Vec<String>>) {
     let param = schema.parse_msg(msg);
     if let Some(param) = into_param(msg) {
         match param {

@@ -1,0 +1,10 @@
+name: Realtime
+sysex: [0x7e]
+then:
+  - class: DeviceId
+    length: 1
+  - class: SubId
+    either:
+      - name: IdentityReply
+        sysex: [0x06, 0x02]
+

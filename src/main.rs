@@ -6,7 +6,7 @@ extern crate strum_macros;
 extern crate lazy_static;
 
 mod devices;
-mod schema;
+//mod schema;
 mod schema2;
 mod parse;
 
@@ -17,7 +17,7 @@ use strum::IntoEnumIterator;
 use crate::devices::DeviceError;
 use crate::devices::CLIENT_NAME;
 
-use crate::schema::{Bounds, Device};
+use crate::schema2::{Bounds, Device};
 use crate::parse::{Token, ParseError};
 
 #[derive(StructOpt, Debug)]
@@ -77,10 +77,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 .for_each(|port| println!("{}", port.name))
         }
 
-        Cmd::Devices => schema::DEVICES.keys().for_each(|dev| println!("{}", dev)),
+        Cmd::Devices => schema2::DEVICES.keys().for_each(|dev| println!("{}", dev)),
 
         Cmd::Params { device_name } => {
-            let (vendor, dev) = schema::DEVICES
+            let (vendor, dev) = schema2::DEVICES
                 .get(&device_name)
                 .ok_or(DeviceError::UnknownDevice { device_name })?;
             if let Some(controls) = &dev.controls {
@@ -89,13 +89,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     println!()
                 }
             }
-            if let Some(controls) = &dev.indexed_controls {
-                for control in controls {
-                    print!("{}", control.name);
-                    print!("/[{}..{}]", control.range.lo, control.range.hi);
-                    println!()
-                }
-            }
+
             // TODO modes
         }
 //        Cmd::Bounds {
@@ -103,7 +97,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 //            param_key,
 //            field_name,
 //        } => {
-//            let dev = schema::DEVICES
+//            let dev = schema2::DEVICES
 //                .get(&device_name)
 //                .ok_or(DeviceError::UnknownDevice { device_name })?;
 //            let param_key = dev.parse_key(&param_key)?;
@@ -114,13 +108,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 //            }?;
 //            for bound in bounds {
 //                match bound {
-//                    schema::Bounds::Values(values) => {
+//                    schema2::Bounds::Values(values) => {
 //                        for value in values {
 //                            println!("{}", value.1)
 //                        }
 //                    }
-//                    schema::Bounds::Range(range) => println!("[{}..{}]", range.lo, range.hi),
-//                    schema::Bounds::MidiNotes(_) => println!("note1,note2,note3,..."),
+//                    schema2::Bounds::Range(range) => println!("[{}..{}]", range.lo, range.hi),
+//                    schema2::Bounds::MidiNotes(_) => println!("note1,note2,note3,..."),
 //                }
 //            }
 //        }

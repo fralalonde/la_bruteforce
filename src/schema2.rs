@@ -31,181 +31,104 @@ pub enum SchemaError {
 }
 
 lazy_static! {
-    pub static ref VENDORS: LinkedHashMap<String, Vendor> = load_vendors();
-    pub static ref DEVICES: LinkedHashMap<String, (&'static Vendor, &'static Device)> = load_devices();
+    pub static ref VENDORS: LinkedHashMap<String, OneOf> = load_vendors();
+    pub static ref DEVICES: LinkedHashMap<String, (&'static Vendor, &'static NodeType)> = load_devices();
 }
 
 fn load_vendors() -> LinkedHashMap<String, Vendor> {
     let mut map = LinkedHashMap::new();
-    let vendor = parse_vendor(include_str!("Realtime.yaml")).expect("Realtime not loaded");
+    let vendor = parse_vendor(include_str!("Realtime2.yaml")).expect("Realtime not loaded");
     map.insert(vendor.name.clone(), vendor);
-    let vendor = parse_vendor(include_str!("Arturia.yaml")).expect("Arturia not loaded");
+    let vendor = parse_vendor(include_str!("Arturia2.yaml")).expect("Arturia not loaded");
     map.insert(vendor.name.clone(), vendor);
     map
 }
 
-fn load_devices() -> LinkedHashMap<String, (&'static Vendor, &'static Device)> {
+fn load_devices() -> LinkedHashMap<String, (&'static Vendor, &'static NodeType)> {
     let mut map = LinkedHashMap::new();
     for v in VENDORS.values() {
-        for dev in &v.devices {
+        for dev in &v.one_of {
             map.insert(dev.name.clone(), (v, dev));
         }
     }
     map
 }
 
-pub enum Sysex {
-    Default(Option<Vec<u8>>),
-    Split{
+pub type Vendor = OneOf;
+pub type Device = OneOf;
+pub type Value = Node;
+
+#[derive(Debug, PartialEq, Deserialize, Clone)]
+pub enum NodeType {
+    Node(Node),
+    OneOf(OneOf),
+    AnyOf(AnyOf),
+    AllOf(AllOf),
+    Range(Range),
+    MidiNotes(MidiNotes),
+}
+
+#[derive(Debug, PartialEq, Deserialize, Clone)]
+pub enum  Sysex {
+    Length {
+        length: usize
+    },
+    Bytes {
+        sysex: Option<Vec<u8>>,
         update: Option<Vec<u8>>,
         request: Option<Vec<u8>>,
         reply: Option<Vec<u8>>
     }
 }
 
-pub enum Operation {
-    Expect,
-    Accept,
-    Take(usize),
-}
-
 #[derive(Debug, PartialEq, Deserialize, Clone)]
 pub struct Node {
-    name: String,
-    sysex: Sysex,
-    operation: Operation,
-    emit: Option<String>,
+    pub desc: Option<String>,
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub sysex: Sysex,
+    pub token: Option<String>,
+    pub child_token: Option<String>,
+    pub port_prefix: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
 pub struct AnyOf {
     #[serde(flatten)]
-    node: Node,
-    any_of: Vec<Box<Visit>>,
+    pub node: Node,
+    pub any_of: Vec<NodeType>,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
 pub struct AllOf {
     #[serde(flatten)]
-    node: Node,
-    all_of: Vec<Box<Visit>>,
+    pub node: Node,
+    pub all_of: Vec<NodeType>,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
 pub struct OneOf {
     #[serde(flatten)]
-    node: Node,
-    one_of: Vec<Box<Visit>>,
+    pub node: Node,
+    pub one_of: Vec<NodeType>,
 }
 
-
-pub trait Context {
-    fn is_reply(&self) -> bool;
-
-}
-
-pub trait Visit {
-    fn visit(&self, context: &mut Context);
-}
-
-impl Visit for Node {
-    fn visit(&self, context: &mut Context) {
-        
-    }
-}
-
-//pub enum Operator {
-//    OneOf
-//    AnyOf
-//    SeqOf
-//}
-
-fn parse_vendor(body: &str) -> Result<Vendor> {
-    Ok(serde_yaml::from_str(body).context(SerdeYamlError)?)
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct Vendor {
-    pub name: String,
-    pub sysex: Vec<u8>,
-    pub devices: Vec<Device>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct Device {
-    pub name: String,
-    pub port_prefix: String,
-    pub sysex: Sysex,
-
-    pub controls: Option<Vec<Control>>,
-    pub indexed_controls: Option<Vec<IndexedControl>>,
-//    pub indexed_modal_controls: Option<Vec<Control>>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct Control {
-    pub name: String,
-    pub sysex: Sysex,
-    pub bounds: Vec<Bounds>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct IndexedControl {
-    pub name: String,
-    pub sysex: Sysex,
-    pub range: Range,
-    pub bounds: Vec<Bounds>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct IndexedModal {
-    pub name: String,
-    pub sysex: Sysex,
-    pub index: Range,
-    pub modes: Vec<Value>,
-    pub fields: Vec<Fields>,
-}
-
-pub type Fields = LinkedHashMap<String, Field>;
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct Field {
-    pub name: String,
-    pub sysex: Sysex,
-    pub bounds: Vec<Bounds>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-//#[serde(tag = "type")]
-#[serde(untagged)]
-pub enum Bounds {
-    /// Name / Value pair
-    Value(Value),
-
-    /// Raw value offset and display value bounds (Low to High, inclusive)
-    Range(Range),
-
-    /// Sequence of notes with offset from std MIDI note value
-    MidiNotes(MidiNotes),
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-pub struct Value {
-    pub name: String,
-    pub sysex: u8,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Deserialize, Clone)]
 pub struct Range {
     pub lo: isize,
     pub hi: isize,
     pub offset: Option<isize>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Deserialize, Clone)]
 pub struct MidiNotes {
     pub max_len: usize,
     pub offset: Option<i16>,
+}
+
+
+fn parse_vendor(body: &str) -> Result<Vendor> {
+    Ok(serde_yaml::from_str(body).context(SerdeYamlError)?)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -292,7 +215,7 @@ impl FromStr for MidiNote {
 
 #[cfg(test)]
 mod test {
-    use crate::schema::{parse_vendor, Device, Vendor};
+    use crate::schema2::{parse_vendor, Device, Vendor};
 
     #[test]
     fn test_parse() {

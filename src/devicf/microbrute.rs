@@ -22,7 +22,7 @@ static MICROBRUTE: &[u8] = &[0x00, 0x20, 0x6b, 0x05];
 
 const REST_NOTE: u8 = 0x7f;
 
-use crate::schema::Parameter;
+use crate::schema2::Parameter;
 
 struct MicrobruteGlobals {
     parameter: Parameter,
@@ -43,7 +43,7 @@ impl MicrobruteGlobals {
 }
 
 pub struct MicroBruteDevice {
-    schema: schema::Device,
+    schema: schema2::Device,
     midi_connection: MidiOutputConnection,
     port_name: String,
     msg_id: usize,

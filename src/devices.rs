@@ -13,11 +13,11 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::thread::sleep;
 
-use crate::{devices, schema};
+use crate::{devices, schema2};
 use linked_hash_map::LinkedHashMap;
 use std::error::Error;
 use strum::IntoEnumIterator;
-use crate::schema::MidiNote;
+use crate::schema2::MidiNote;
 use crate::parse::{Token, SysexReply, AST};
 use snafu::ResultExt;
 
@@ -77,8 +77,8 @@ pub struct MidiPort {
 }
 
 pub struct DevicePort {
-    pub vendor: &'static schema::Vendor,
-    pub device: &'static schema::Device,
+    pub vendor: &'static schema2::Vendor,
+    pub device: &'static schema2::Device,
     pub client: MidiOutput,
     pub port: MidiPort,
 }
@@ -132,19 +132,19 @@ pub enum DeviceType {
 }
 
 pub struct Device {
-    pub vendor:  &'static schema::Vendor,
-    pub device:  &'static schema::Device,
+    pub vendor:  &'static schema2::Vendor,
+    pub device:  &'static schema2::Device,
     pub port: MidiPort,
     connection: MidiOutputConnection,
     msg_id: usize,
 }
 
-pub fn locate(vendor: &'static schema::Vendor, device: &'static schema::Device, _index: u8) -> Result<DevicePort> {
+pub fn locate(vendor: &'static schema2::Vendor, device: &'static schema2::Device, _index: u8) -> Result<DevicePort> {
     // TODO support index for multiple devices of same model
     let client = MidiOutput::new(CLIENT_NAME).expect("MIDI client");
     Ok(devices::output_ports(&client)
         .into_iter()
-        .find(|port| port.name.starts_with(&device.port_prefix))
+        .find(|port| port.name.starts_with(&device.node.port_prefix))
         .map(|port| devices::DevicePort {
             vendor,
             device,
