@@ -16,7 +16,7 @@ use strum::IntoEnumIterator;
 use crate::devices::DeviceError;
 use crate::devices::CLIENT_NAME;
 
-use crate::schema::{Bounds, Device};
+use crate::schema::{Device, Node};
 use crate::parse::{Token, ParseError};
 
 #[derive(StructOpt, Debug)]
@@ -82,19 +82,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let (vendor, dev) = schema::DEVICES
                 .get(&device_name)
                 .ok_or(DeviceError::UnknownDevice { device_name })?;
-            if let Some(controls) = &dev.controls {
-                for control in controls {
-                    print!("{}", control.name);
+
+            for node in &dev.nodes {
+                if let Node::Control(control) = node {
+                    print!("{}", control.control);
                     println!()
                 }
             }
-            if let Some(controls) = &dev.indexed_controls {
-                for control in controls {
-                    print!("{}", control.name);
-                    print!("/[{}..{}]", control.index.lo, control.index.hi);
-                    println!()
-                }
-            }
+
             // TODO modes
         }
 //        Cmd::Bounds {

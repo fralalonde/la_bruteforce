@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use snafu::*;
 use std::str::FromStr;
 use std::num::ParseIntError;
-use crate::schema::MidiNote;
+use crate::schema::{MidiNote, Form};
 use std::ops::Deref;
 use std::cell::RefCell;
 use indextree::{Arena, NodeId, Node};
@@ -55,8 +55,8 @@ pub enum Token {
     Control(&'static schema::Control),
     IndexedControl(&'static schema::IndexedControl, u8),
 
-    Mode(&'static schema::Value),
-    Field(&'static schema::Field),
+//    Mode(&'static schema::Value),
+//    Field(&'static schema::Field),
 
     Value(&'static schema::Value),
     InRange(&'static schema::Range, isize),
@@ -82,28 +82,28 @@ pub const SYSEX_BEGIN: &[u8] = &[0xf0];
 pub const SYSEX_END: &[u8] = &[0xf7];
 
 impl Token {
-    pub fn to_sysex(&self, buffer: &mut Buffer) {
+    pub fn to_sysex(&self, buffer: &mut Buffer, form: schema::Form) {
         match self {
             Token::Sysex => {
                 buffer.head.extend_from_slice(SYSEX_BEGIN);
                 buffer.tail.extend_from_slice(SYSEX_END);
             }
 
-            Token::Vendor(v) => buffer.head.extend_from_slice(&v.sysex),
+            Token::Vendor(v) => buffer.head.extend_from_slice(&v.sysex.slice(form)),
             Token::Device(d, idx) => {
-                buffer.head.extend_from_slice(&d.sysex);
+                buffer.head.extend_from_slice(&d.sysex.slice(form));
                 buffer.head.push(*idx);
             },
-            Token::Control(c) => buffer.head.extend_from_slice(&c.sysex),
+            Token::Control(c) => buffer.head.extend_from_slice(&c.sysex.slice(form)),
             Token::IndexedControl(c, idx) => {
-                buffer.head.extend_from_slice(&c.sysex);
+                buffer.head.extend_from_slice(&c.sysex.slice(form));
                 buffer.head.push(*idx);
             },
 
-            Token::Mode(m) => buffer.head.push(m.sysex),
-            Token::Field(f) => buffer.head.extend_from_slice(&f.sysex),
+//            Token::Mode(m) => buffer.head.push(m.sysex),
+//            Token::Field(f) => buffer.head.extend_from_slice(&f.sysex),
 
-            Token::Value(v) => buffer.head.push(v.sysex),
+            Token::Value(v) => buffer.head.extend_from_slice(v.sysex.slice(form)),
             Token::InRange(r, idx) => buffer.head.push((*idx) as u8),
             Token::MidiNotes(s, offset, notes) => {
                 buffer.head.push(*offset);
@@ -134,23 +134,23 @@ impl  AST {
         None
     }
 
-    pub fn to_sysex(&self, msg_id: &mut usize) -> Result<Vec<Vec<u8>>> {
+    pub fn to_sysex(&self, msg_id: &mut usize, form: Form) -> Result<Vec<Vec<u8>>> {
         let mut messages: Vec<Vec<u8>> = vec![];
         let mut buffer = Buffer::default();
-        self.to_sysex_inner(self.root, buffer, &mut messages);
+        self.to_sysex_inner(self.root, buffer, &mut messages, form);
         Ok(messages)
     }
 
-    fn to_sysex_inner(&self, node_id: NodeId, mut buffer: Buffer, messages: &mut Vec<Vec<u8>>) {
+    fn to_sysex_inner(&self, node_id: NodeId, mut buffer: Buffer, messages: &mut Vec<Vec<u8>>, form: Form) {
         let node: &Node<Token> = &self.arena[node_id];
-        node.get().to_sysex(&mut buffer);
+        node.get().to_sysex(&mut buffer, form);
         if let Some(first_child) = node.first_child() {
             if Some(first_child) == node.last_child() {
                 // only child, no need to clone & fork
-                self.to_sysex_inner(first_child, buffer, messages);
+                self.to_sysex_inner(first_child, buffer, messages, form);
             } else {
                 for c in node_id.children(&self.arena) {
-                    self.to_sysex_inner(c, buffer.clone(), messages);
+                    self.to_sysex_inner(c, buffer.clone(), messages, form);
                 }
             }
         } else {
@@ -244,7 +244,7 @@ impl  SysexReply {
         }
         let mut message = PCTX{message, pos:0};
         message.expect(SYSEX_BEGIN)?;
-        self.vendor(self.ast.root, &mut message)?;
+        self.vendor(self.ast.root, &mut message, Form::Reply)?;
         Ok(())
     }
 
@@ -252,110 +252,114 @@ impl  SysexReply {
         self.ast
     }
 
-    fn vendor(&mut self, node: NodeId, message: &mut PCTX) -> Result<()> {
+    fn nodes(&mut self, node: NodeId, nodes: &[Node], message: &mut PCTX, form: Form) -> Result<()> {
+        Ok(())
+    }
+
+    fn vendor(&mut self, node: NodeId, message: &mut PCTX, form: Form) -> Result<()> {
         for v_schema in schema::VENDORS.values() {
-            if message.accept(&v_schema.sysex) {
+            if message.accept(&v_schema.sysex.slice(form)) {
                 let v_node = self.ast.push_child(node, Token::Vendor(v_schema));
-                return self.device(v_node, v_schema, message);
+                return self.nodes(v_node, v_schema.nodes, message, form);
             }
         }
         Err(ParseError::UnknownVendor)
     }
 
-    fn device(&mut self, node: NodeId, vendor: &'static schema::Vendor, message: &mut PCTX) -> Result<()> {
-        for d_schema in &vendor.devices {
-            if message.accept(&d_schema.sysex) {
-                let sysex_id = message.next_byte()?;
-                let _reply_id = message.next_byte()?;
-                let _unknown = message.next_byte()?; // 01 for regular param, 23 for sequences
-                let d_node = self.ast.push_child(node, Token::Device(d_schema, sysex_id));
-                return self.control(d_node, d_schema, message);
-            }
-        }
-        Err(ParseError::UnknownDevice)
-    }
-
-    fn control(&mut self, node: NodeId, device: &'static schema::Device, message: &mut PCTX) -> Result<()> {
-        if let Some(controls) = &device.controls {
-            for c_schema in controls {
-                if message.accept(&c_schema.sysex) {
-                    let c_node = self.ast.push_child(node, Token::Control(c_schema));
-                    return self.bounds(c_node, &c_schema.bounds, message);
-                }
-            }
-        }
-        if let Some(controls) = &device.indexed_controls {
-            for ic_schema in controls {
-                if message.accept(&ic_schema.sysex) {
-                    // could decompose into index() if other tokens need it e.g. device
-                    let index = message.next_byte()?;
-                    let ic_node = self.ast.push_child(node, Token::IndexedControl(ic_schema, index));
-                    return self.bounds(ic_node, &ic_schema.bounds, message);
-                }
-            }
-        }
-
-        // TODO indexed modal controls
-
-        Err(ParseError::UnknownControl{text: hex::encode(message.message)})
-    }
-
-    fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], message: &mut PCTX) -> Result<()> {
-        for b_schema in bounds {
-            let check = match b_schema {
-                schema::Bounds::Value(values) => self.values(values, message),
-                schema::Bounds::Range(range) => self.in_range(range, message),
-                schema::Bounds::MidiNotes(seq) => {
-                    let start_offset = message.next_byte()?;
-                    let seq_length = message.next_byte()? as usize;
-                    self.note_seq(start_offset, seq_length, seq, message)
-                },
-            };
-            if let Some(token) = check {
-                let ic_node = self.ast.push_child(node, token);
-                return Ok(())
-            }
-        }
-        Err(ParseError::NoMatchingBounds)
-    }
-
-    fn values(&mut self, value: &'static schema::Value, message: &mut PCTX) -> Option<Token> {
-        message.next_byte().
-            ok()
-            .and_then(|v| {
-                if v.eq(&value.sysex) {
-                    return Some(Token::Value(value));
-                }
-                None
-            })
-    }
-
-    fn in_range(&mut self, range: &'static schema::Range, message: &mut PCTX) -> Option<Token> {
-        message.next_byte().ok()
-            .and_then(|value| {
-                let mut value = value as isize;
-                if value >= range.lo && value <= range.hi {
-                    if let Some(offset) = range.offset {
-                        value += offset;
-                    }
-                    return Some(Token::InRange(range, value))
-                }
-                None
-            }
-        )
-    }
-
-    fn note_seq(&mut self, start_offset: u8, seq_length: usize, range: &'static schema::MidiNotes, message: &mut PCTX) -> Option<Token> {
-        let pitch_offset = range.offset.unwrap_or(0);
-        if let Ok(deez_notez) = message.take(seq_length) {
-            let mut notes = vec![];
-            for z in deez_notez {
-                notes.push(MidiNote{note: (z as i16 + pitch_offset) as u8})
-            }
-            return Some(Token::MidiNotes(range, start_offset, notes))
-        }
-        None
-    }
+//    fn device(&mut self, node: NodeId, vendor: &'static schema::Vendor, message: &mut PCTX) -> Result<()> {
+//        for d_schema in &vendor.devices {
+//            if message.accept(&d_schema.sysex) {
+//                let sysex_id = message.next_byte()?;
+//                let _reply_id = message.next_byte()?;
+//                let _unknown = message.next_byte()?; // 01 for regular param, 23 for sequences
+//                let d_node = self.ast.push_child(node, Token::Device(d_schema, sysex_id));
+//                return self.control(d_node, d_schema, message);
+//            }
+//        }
+//        Err(ParseError::UnknownDevice)
+//    }
+//
+//    fn control(&mut self, node: NodeId, device: &'static schema::Device, message: &mut PCTX) -> Result<()> {
+//        if let Some(controls) = &device.controls {
+//            for c_schema in controls {
+//                if message.accept(&c_schema.sysex) {
+//                    let c_node = self.ast.push_child(node, Token::Control(c_schema));
+//                    return self.bounds(c_node, &c_schema.bounds, message);
+//                }
+//            }
+//        }
+//        if let Some(controls) = &device.indexed_controls {
+//            for ic_schema in controls {
+//                if message.accept(&ic_schema.sysex) {
+//                    // could decompose into index() if other tokens need it e.g. device
+//                    let index = message.next_byte()?;
+//                    let ic_node = self.ast.push_child(node, Token::IndexedControl(ic_schema, index));
+//                    return self.bounds(ic_node, &ic_schema.bounds, message);
+//                }
+//            }
+//        }
+//
+//        // TODO indexed modal controls
+//
+//        Err(ParseError::UnknownControl{text: hex::encode(message.message)})
+//    }
+//
+//    fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], message: &mut PCTX) -> Result<()> {
+//        for b_schema in bounds {
+//            let check = match b_schema {
+//                schema::Bounds::Value(values) => self.values(values, message),
+//                schema::Bounds::Range(range) => self.in_range(range, message),
+//                schema::Bounds::MidiNotes(seq) => {
+//                    let start_offset = message.next_byte()?;
+//                    let seq_length = message.next_byte()? as usize;
+//                    self.note_seq(start_offset, seq_length, seq, message)
+//                },
+//            };
+//            if let Some(token) = check {
+//                let ic_node = self.ast.push_child(node, token);
+//                return Ok(())
+//            }
+//        }
+//        Err(ParseError::NoMatchingBounds)
+//    }
+//
+//    fn values(&mut self, value: &'static schema::Value, message: &mut PCTX) -> Option<Token> {
+//        message.next_byte().
+//            ok()
+//            .and_then(|v| {
+//                if v.eq(&value.sysex) {
+//                    return Some(Token::Value(value));
+//                }
+//                None
+//            })
+//    }
+//
+//    fn in_range(&mut self, range: &'static schema::Range, message: &mut PCTX) -> Option<Token> {
+//        message.next_byte().ok()
+//            .and_then(|value| {
+//                let mut value = value as isize;
+//                if value >= range.lo && value <= range.hi {
+//                    if let Some(offset) = range.offset {
+//                        value += offset;
+//                    }
+//                    return Some(Token::InRange(range, value))
+//                }
+//                None
+//            }
+//        )
+//    }
+//
+//    fn note_seq(&mut self, start_offset: u8, seq_length: usize, range: &'static schema::MidiNotes, message: &mut PCTX) -> Option<Token> {
+//        let pitch_offset = range.offset.unwrap_or(0);
+//        if let Ok(deez_notez) = message.take(seq_length) {
+//            let mut notes = vec![];
+//            for z in deez_notez {
+//                notes.push(MidiNote{note: (z as i16 + pitch_offset) as u8})
+//            }
+//            return Some(Token::MidiNotes(range, start_offset, notes))
+//        }
+//        None
+//    }
 
 //    fn accept(&mut self, value: &[u8], mut message: &mut [u8]) -> bool {
 //        if let Ok(token) = self.take(value.len(), message) {
@@ -428,107 +432,107 @@ impl  TextParser {
         }
     }
 
-    fn device(&mut self, node: NodeId, device: &str, items: &mut [String]) -> Result<()> {
-        if let Some((vendor, dev)) = schema::DEVICES.get(device) {
-            let v_node = self.ast.push_child(node, Token::Vendor(vendor));
-            let d_node = self.ast.push_child(v_node, Token::Device(dev, 1));
-            self.control(d_node, dev, items)
-        } else {
-            Err(ParseError::UnknownDevice)
-        }
-    }
-
-    fn control(&mut self, node: NodeId, device: &'static schema::Device, items: &mut [String]) -> Result<()> {
-        let (citem, mut items) = items.split_first_mut().ok_or(ParseError::MissingControl)?;
-        let seq_parts: Vec<&str> = citem.split("/").collect();
-        let cname = seq_parts.get(0).ok_or(ParseError::MissingControlName)?;
-        let mut mode_parts: Vec<&str> = citem.split(":").collect();
-        let (ctoken, bounds) = match (seq_parts.len(), mode_parts.len()) {
-            (1, 1) => {
-                let control = device.controls.iter().flatten()
-                    .find(|c| c.name.eq(cname))
-                    .ok_or(ParseError::UnknownControl{text: cname.to_string()})?;
-                Ok((Token::Control(control), &control.bounds))
-            },
-            (2, 1) => {
-                let control = device.indexed_controls.iter().flatten()
-                    .find(|c| c.name.eq(cname))
-                    .ok_or(ParseError::UnknownControl{text: cname.to_string()})?;
-                let idx = u8::from_str(seq_parts.get(1).unwrap()).map_err(|err| ParseError::BadControlIndex)?;
-                Ok((Token::IndexedControl(control, idx), &control.bounds))
-            },
-            // TODO
-//            (1, 2) => modal control
-//            (2, 2) => modal indexed control
-            _ => Err(ParseError::BadControlSyntax{text: cname.to_string()})
-        }?;
-
-        let d_node = self.ast.push_child(node, ctoken);
-
-        if self.for_update {
-            self.bounds(d_node, &bounds, items)
-        } else if items.is_empty() {
-            Ok(())
-        } else {
-            Err(ParseError::ExtraneousChars)
-        }
-    }
-
-    fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], items: &mut [String]) -> Result<()> {
-        let (value, mut _items) = items.split_first_mut().ok_or(ParseError::MissingValue)?;
-        for b in bounds {
-            let check = match b {
-                schema::Bounds::Value(s_val) => self.values(s_val, value),
-                schema::Bounds::Range(range) => self.in_range(range, value),
-                schema::Bounds::MidiNotes(seq) => self.note_seq(seq, value),
-            };
-            if let Some(token) = check {
-                self.ast.push_child(node, token);
-            }
-        }
-        Err(ParseError::NoMatchingBounds)
-    }
-
-    fn values(&mut self, value: &'static schema::Value, input: &str) -> Option<Token> {
-        if value.name.eq(input) {
-            Some(Token::Value(value))
-        } else {
-            None
-        }
-    }
-
-    fn in_range(&mut self, range: &'static schema::Range, input: &str) -> Option<Token> {
-        let mut value = isize::from_str(&input).ok()?;
-        if value >= range.lo && value <= range.hi {
-            value += range.offset.unwrap_or(0);
-            return Some(Token::InRange(range, value))
-        }
-        None
-    }
-
-    fn note_seq(&mut self, range: &'static schema::MidiNotes, input: &str) -> Option<Token> {
-        let mut nit = input.split(",");
-        let mut notes = vec![];
-        for n in nit {
-            if n.is_empty() {
-                continue
-            }
-            if let Ok(note) = MidiNote::from_str(n) {
-                notes.push(note);
-            }
-        }
-        Some(Token::MidiNotes(range, 0, notes))
-    }
-
-    fn take(&mut self, matching: &str, input: &mut str) -> Result<String> {
-        let mut i = 0;
-        let mut vh = input.chars();
-        while let Some(c) = vh.next() {
-            matching.contains(c);
-            i += 1;
-        }
-        let (z, input) = input.split_at_mut(i);
-        Ok(z.to_string())
-    }
+//    fn device(&mut self, node: NodeId, device: &str, items: &mut [String]) -> Result<()> {
+//        if let Some((vendor, dev)) = schema::DEVICES.get(device) {
+//            let v_node = self.ast.push_child(node, Token::Vendor(vendor));
+//            let d_node = self.ast.push_child(v_node, Token::Device(dev, 1));
+//            self.control(d_node, dev, items)
+//        } else {
+//            Err(ParseError::UnknownDevice)
+//        }
+//    }
+//
+//    fn control(&mut self, node: NodeId, device: &'static schema::Device, items: &mut [String]) -> Result<()> {
+//        let (citem, mut items) = items.split_first_mut().ok_or(ParseError::MissingControl)?;
+//        let seq_parts: Vec<&str> = citem.split("/").collect();
+//        let cname = seq_parts.get(0).ok_or(ParseError::MissingControlName)?;
+//        let mut mode_parts: Vec<&str> = citem.split(":").collect();
+//        let (ctoken, bounds) = match (seq_parts.len(), mode_parts.len()) {
+//            (1, 1) => {
+//                let control = device.items.iter().flatten()
+//                    .find(|c| c.name.eq(cname))
+//                    .ok_or(ParseError::UnknownControl{text: cname.to_string()})?;
+//                Ok((Token::Control(control), &control.bounds))
+//            },
+//            (2, 1) => {
+//                let control = device.items.iter().flatten()
+//                    .find(|c| c.name.eq(cname))
+//                    .ok_or(ParseError::UnknownControl{text: cname.to_string()})?;
+//                let idx = u8::from_str(seq_parts.get(1).unwrap()).map_err(|err| ParseError::BadControlIndex)?;
+//                Ok((Token::IndexedControl(control, idx), &control.items))
+//            },
+//            // TODO
+////            (1, 2) => modal control
+////            (2, 2) => modal indexed control
+//            _ => Err(ParseError::BadControlSyntax{text: cname.to_string()})
+//        }?;
+//
+//        let d_node = self.ast.push_child(node, ctoken);
+//
+//        if self.for_update {
+//            self.bounds(d_node, &bounds, items)
+//        } else if items.is_empty() {
+//            Ok(())
+//        } else {
+//            Err(ParseError::ExtraneousChars)
+//        }
+//    }
+//
+//    fn bounds(&mut self, node: NodeId, bounds: &'static [schema::Bounds], items: &mut [String]) -> Result<()> {
+//        let (value, mut _items) = items.split_first_mut().ok_or(ParseError::MissingValue)?;
+//        for b in bounds {
+//            let check = match b {
+//                schema::Bounds::Value(s_val) => self.values(s_val, value),
+//                schema::Bounds::Range(range) => self.in_range(range, value),
+//                schema::Bounds::MidiNotes(seq) => self.note_seq(seq, value),
+//            };
+//            if let Some(token) = check {
+//                self.ast.push_child(node, token);
+//            }
+//        }
+//        Err(ParseError::NoMatchingBounds)
+//    }
+//
+//    fn values(&mut self, value: &'static schema::Value, input: &str) -> Option<Token> {
+//        if value.name.eq(input) {
+//            Some(Token::Value(value))
+//        } else {
+//            None
+//        }
+//    }
+//
+//    fn in_range(&mut self, range: &'static schema::Range, input: &str) -> Option<Token> {
+//        let mut value = isize::from_str(&input).ok()?;
+//        if value >= range.lo && value <= range.hi {
+//            value += range.offset.unwrap_or(0);
+//            return Some(Token::InRange(range, value))
+//        }
+//        None
+//    }
+//
+//    fn note_seq(&mut self, range: &'static schema::MidiNotes, input: &str) -> Option<Token> {
+//        let mut nit = input.split(",");
+//        let mut notes = vec![];
+//        for n in nit {
+//            if n.is_empty() {
+//                continue
+//            }
+//            if let Ok(note) = MidiNote::from_str(n) {
+//                notes.push(note);
+//            }
+//        }
+//        Some(Token::MidiNotes(range, 0, notes))
+//    }
+//
+//    fn take(&mut self, matching: &str, input: &mut str) -> Result<String> {
+//        let mut i = 0;
+//        let mut vh = input.chars();
+//        while let Some(c) = vh.next() {
+//            matching.contains(c);
+//            i += 1;
+//        }
+//        let (z, input) = input.split_at_mut(i);
+//        Ok(z.to_string())
+//    }
 
 }

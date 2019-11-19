@@ -1,147 +1,139 @@
-name: Arturia
+vendor: Arturia
 sysex: [0x00, 0x20, 0x6b]
-devices:
-  - name: MicroBrute
+nodes:
+  - device: MicroBrute
     port_prefix: MicroBrute
-    sysex: [0x04]
-    classes:
-      Control:
-        out:
-          offset:
-          length:
-        in:
-          offset:
-          length:
-      Parameter:
-        offset: 8
-        length: 1
-      Value:
-        offset: 8
-        length: 1
-    controls:
-      - name: Seq
-        range:
+    sysex:
+      default: [0x04]
+      request: [0x05]
+    nodes:
+      - index:
           lo: 1
           hi: 8
           offset: 1
+#      - msg_id:
+#          bytes: 1
+      - control: Seq
         sysex: [0x23, 0x3a]
-        bounds:
-          - type: MidiNotes
-            max_len: 64
+        nodes:
+          - lo: 1
+            hi: 8
+            offset: 1
+          - max_notes: 64
             offset: 24
-      - name: MidiRxChan
+      - control: MidiRxChan
         sysex: [0x01, 0x05]
-        bounds:
+        nodes:
           - lo: 1
             hi: 16
             offset: 1
-          - name: All
-            sysex: 0x10
-      - name: MidiTxChan
+          - value: All
+            sysex: [0x10]
+      - control: MidiTxChan
         sysex: [0x01, 0x07]
-        bounds:
+        nodes:
           - lo: 1
             hi: 16
             offset: 1
-      - name: KeyNotePriority
+      - control: KeyNotePriority
         sysex: [0x01, 0x0b]
-        bounds:
-          - name: LastNote
-            sysex: 0
-          - name: LowNote
-            sysex: 1
-          - name: HighNote
-            sysex: 2
-      - name: KeyVelocityResponse
+        nodes:
+          - value: LastNote
+            sysex: [0x0]
+          - value: LowNote
+            sysex: [0x1]
+          - value: HighNote
+            sysex: [0x2]
+      - control: KeyVelocityResponse
         sysex: [0x01, 0x11]
-        bounds:
-          - name: Logarithmic
-            sysex: 0
-          - name: Exponential
-            sysex: 1
-          - name: Linear
-            sysex: 2
-      - name: LfoKeyRetrig
+        nodes:
+          - value: Logarithmic
+            sysex: [0x0]
+          - value: Exponential
+            sysex: [0x1]
+          - value: Linear
+            sysex: [0x2]
+      - control: LfoKeyRetrig
         sysex: [0x01, 0x0f]
-        bounds:
-          - name: Off
-            sysex: 0
-          - name: On
-            sysex: 1
-      - name: EnvLegatoMode
+        nodes:
+          - value: Off
+            sysex: [0x0]
+          - value: On
+            sysex: [0x1]
+      - control: EnvLegatoMode
         sysex: [0x01, 0x0d]
-        bounds:
-          - name: Off
-            sysex: 0x00
-          - name: On
-            sysex: 0x01
-      - name: BendRange
+        nodes:
+          - value: Off
+            sysex: [0x00]
+          - value: On
+            sysex: [0x01]
+      - control: BendRange
         sysex: [0x01, 0x2c]
-        bounds:
+        nodes:
           - lo: 1
             hi: 12
             offset: 1
-      - name: Gate
+      - control: Gate
         sysex: [0x01, 0x36]
-        bounds:
-          - name: Short
-            sysex: 0
-          - name: Medium
-            sysex: 1
-          - name: Long
-            sysex: 2
-      - name: Sync
+        nodes:
+          - value: Short
+            sysex: [0x0]
+          - value: Medium
+            sysex: [0x1]
+          - value: Long
+            sysex: [0x2]
+      - control: Sync
         sysex: [0x01, 0x3c]
-        bounds:
-          - name: Auto
-            sysex: 0
-          - name: Internal
-            sysex: 1
-          - name: External
-            sysex: 2
-      - name: SeqPlay
+        nodes:
+          - value: Auto
+            sysex: [0x0]
+          - value: Internal
+            sysex: [0x1]
+          - value: External
+            sysex: [0x2]
+      - control: SeqPlay
         sysex: [0x01, 0x2e]
-        bounds:
-          - name: Hold
-            sysex: 0
-          - name: NoteOn
-            sysex: 1
-      - name: SeqKeyRetrig
+        nodes:
+          - value: Hold
+            sysex: [0x0]
+          - value: NoteOn
+            sysex: [0x1]
+      - control: SeqKeyRetrig
         sysex: [0x01, 0x34]
-        bounds:
-          - name: Reset
-            sysex: 0x00
-          - name: Legato
-            sysex: 0x01
-          - name: None
-            sysex: 0x02
-      - name: SeqNextSeq
+        nodes:
+          - value: Reset
+            sysex: [0x00]
+          - value: Legato
+            sysex: [0x01]
+          - value: None
+            sysex: [0x02]
+      - control: SeqNextSeq
         sysex: [0x01, 0x32]
-        bounds:
-          - name: End
-            sysex: 0x00
-          - name: Reset
-            sysex: 0x01
-          - name: Continue
-            sysex: 0x02
-      - name: SeqStep
+        nodes:
+          - value: End
+            sysex: [0x00]
+          - value: Reset
+            sysex: [0x01]
+          - value: Continue
+            sysex: [0x02]
+      - control: SeqStep
         sysex: [0x01, 0x38]
-        bounds:
-          - name: 1/4
-            sysex: 0x04
-          - name: 1/8
-            sysex: 0x08
-          - name: 1/16
-            sysex: 0x10
-          - name: 1/32
-            sysex: 0x20
-      - name: SeqStepOn
+        nodes:
+          - value: 1/4
+            sysex: [0x04]
+          - value: 1/8
+            sysex: [0x08]
+          - value: 1/16
+            sysex: [0x10]
+          - value: 1/32
+            sysex: [0x20]
+      - control: SeqStepOn
         sysex: [0x01, 0x2a]
-        bounds:
-          - name: Clock
-            sysex: 0x00
-          - name: Gate
-            sysex: 0x01
+        nodes:
+          - value: Clock
+            sysex: [0x00]
+          - value: Gate
+            sysex: [0x01]
 
   ####
 #    - name: BeatStep
@@ -165,35 +157,35 @@ devices:
 #            Mode:
 #              sysex: [0x00]
 #              modes: true
-#              bounds:
+#              nodes:
 #                - Off: 0x00
 #                  CC: 0x01
 #                  RPN: 0x02
 #            CCNum:
 #              sysex: [0x45]
-#              bounds:
+#              nodes:
 #                - lo: 0
 #                  hi: 127
 #            Min:
 #              sysex: [0x45]
-#              bounds:
+#              nodes:
 #                - lo: 0
 #                  hi: 127
 #            Max:
 #              sysex: []
-#              bounds:
+#              nodes:
 #                - lo: 0
 #                  hi: 127
 #            Channel:
 #              sysex: []
-#              bounds:
+#              nodes:
 #                - lo: 1
 #                  hi: 16
 #                  offset: 1
 #                - Global: 0x10
 #            Option:
 #              sysex: []
-#              bounds:
+#              nodes:
 #                - Absolute: 0x00
 #                  Relative1: 0x01
 #                  Relative2: 0x02

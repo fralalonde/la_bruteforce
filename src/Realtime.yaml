@@ -1,0 +1,6 @@
+vendor: Realtime
+sysex: [0x7f]
+nodes:
+  - message: Identity Reply
+    sysex: [0x01, 0x06, 0x02]
+

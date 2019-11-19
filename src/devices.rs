@@ -17,7 +17,7 @@ use crate::{devices, schema};
 use linked_hash_map::LinkedHashMap;
 use std::error::Error;
 use strum::IntoEnumIterator;
-use crate::schema::MidiNote;
+use crate::schema::{MidiNote, Form};
 use crate::parse::{Token, SysexReply, AST};
 use snafu::ResultExt;
 
@@ -152,7 +152,7 @@ pub fn locate(vendor: &'static schema::Vendor, device: &'static schema::Device, 
             port,
         })
         .ok_or(DeviceError::NoConnectedDevice {
-            device_name: device.name.clone(),
+            device_name: device.device.clone(),
         })?)
 }
 
@@ -161,11 +161,6 @@ impl Device {
     pub fn identify(&mut self) -> Result<()> {
         static ID_KEY: &str = "ID";
 
-        let header = [
-            self.vendor.sysex.as_slice(),
-            self.device.sysex.as_slice(),
-        ]
-        .concat();
         let sysex_replies = self.sysex_receiver()?;
         self.connection
             .send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7]).context(MidiSendError)?;
@@ -201,7 +196,7 @@ impl Device {
 
     pub fn query(&mut self, root: &AST) -> Result<String> {
         let receiver = self.sysex_receiver()?;
-        let messages = root.to_sysex(&mut self.msg_id).context(ParseError)?;
+        let messages = root.to_sysex(&mut self.msg_id, Form::Query).context(ParseError)?;
         for msg in messages {
             self.connection.send(&msg).context(MidiSendError)?
         }
