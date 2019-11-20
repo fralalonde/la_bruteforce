@@ -89,7 +89,7 @@ impl Token {
                 buffer.tail.extend_from_slice(SYSEX_END);
             }
 
-            Token::Vendor(v) => buffer.head.extend_from_slice(&v.sysex.slice(form)),
+            Token::Vendor(v) => buffer.head.extend_from_slice(v.sysex.slice(form)),
             Token::Device(d, idx) => {
                 buffer.head.extend_from_slice(&d.sysex.slice(form));
                 buffer.head.push(*idx);
@@ -252,7 +252,7 @@ impl  SysexReply {
         self.ast
     }
 
-    fn nodes(&mut self, node: NodeId, nodes: &[Node], message: &mut PCTX, form: Form) -> Result<()> {
+    fn nodes(&mut self, node: NodeId, nodes: &[schema::Node], message: &mut PCTX, form: Form) -> Result<()> {
         Ok(())
     }
 
@@ -260,7 +260,7 @@ impl  SysexReply {
         for v_schema in schema::VENDORS.values() {
             if message.accept(&v_schema.sysex.slice(form)) {
                 let v_node = self.ast.push_child(node, Token::Vendor(v_schema));
-                return self.nodes(v_node, v_schema.nodes, message, form);
+                return self.nodes(v_node, &v_schema.nodes, message, form);
             }
         }
         Err(ParseError::UnknownVendor)
@@ -399,7 +399,7 @@ pub fn parse_query(device: &str, items: &mut [String]) -> Result<AST> {
         return Err(ParseError::EmptyQuery)
     }
     let mut parser = TextParser::new(false);
-    parser.device(parser.ast.root, device, items)?;
+    parser.device(parser.ast.root, device, items, Form::Query)?;
     Ok(parser.ast)
 }
 
@@ -408,7 +408,7 @@ pub fn parse_update(device: &str, items: &mut [String]) -> Result<AST> {
         return Err(ParseError::EmptyQuery)
     }
     let mut parser = TextParser::new(true);
-    parser.device(parser.ast.root, device, items)?;
+    parser.device(parser.ast.root, device, items, Form::Update)?;
     Ok(parser.ast)
 }
 
@@ -432,16 +432,20 @@ impl  TextParser {
         }
     }
 
-//    fn device(&mut self, node: NodeId, device: &str, items: &mut [String]) -> Result<()> {
-//        if let Some((vendor, dev)) = schema::DEVICES.get(device) {
-//            let v_node = self.ast.push_child(node, Token::Vendor(vendor));
-//            let d_node = self.ast.push_child(v_node, Token::Device(dev, 1));
-//            self.control(d_node, dev, items)
-//        } else {
-//            Err(ParseError::UnknownDevice)
-//        }
-//    }
-//
+    fn device(&mut self, node: NodeId, device: &str, items: &mut [String], form: Form) -> Result<()> {
+        if let Some((vendor, dev)) = schema::DEVICES.get(device) {
+            let v_node = self.ast.push_child(node, Token::Vendor(vendor));
+            let d_node = self.ast.push_child(v_node, Token::Device(dev, 1));
+            self.nodes(d_node, &dev.nodes, items, form)
+        } else {
+            Err(ParseError::UnknownDevice)
+        }
+    }
+
+    fn nodes(&mut self, node: NodeId, device: &[schema::Node], items: &mut [String], form: Form) -> Result<()> {
+        Ok(())
+    }
+
 //    fn control(&mut self, node: NodeId, device: &'static schema::Device, items: &mut [String]) -> Result<()> {
 //        let (citem, mut items) = items.split_first_mut().ok_or(ParseError::MissingControl)?;
 //        let seq_parts: Vec<&str> = citem.split("/").collect();

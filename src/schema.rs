@@ -81,9 +81,22 @@ pub enum Sysex {
 }
 
 impl Sysex {
-    pub fn slice(&self, form: Form) -> &[u8] {
+//    pub fn ext(&self, buffer: &mut Vec<u8>, form: Form) {
+//        match self {
+//            Sysex::Single(single) => buffer.extend_from_slice(&single),
+//            Sysex::Split {default, reply, update,  query} => {
+//                &match form {
+//                    Form::Query => buffer.extend_from_slice(&query),
+//                    Form::Reply => buffer.extend_from_slice(&reply),
+//                    Form::Update => buffer.extend_from_slice(&update),
+//                }.unwrap_or(default.unwrap())
+//            },
+//        };
+//    }
+
+    pub fn slice<'a>(&self, form: Form) -> &'a [u8] {
         match self {
-            Sysex::Single(single) => &single,
+            Sysex::Single(single) => single,
             Sysex::Split {default, reply, update,  query} => {
                 &match form {
                     Form::Query => query,
